@@ -847,6 +847,28 @@ class ScopedContextApplication:
                 await authorize_scopes((self.scope_id, *scope.context_references))
             return await self._prepare(request, scope)
 
+    async def prepare_incremental(
+        self,
+        request: PrepareContextRequest,
+        /,
+        *,
+        base_pack: object | None = None,
+        authorize_scopes: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
+    ) -> object:
+        from powercontext.builtin.runtime.context_pack import ContextPack, ContextPackDelta
+
+        prepared = await self.prepare(request, authorize_scopes=authorize_scopes)
+        content_bytes = (prepared.content or "").encode("utf-8")
+        pack = ContextPack.build((content_bytes,))
+
+        if base_pack is None:
+            return pack
+
+        if not isinstance(base_pack, ContextPack):
+            raise TypeError("base_pack must be a ContextPack instance")
+
+        return ContextPackDelta.between(base_pack, pack)
+
     async def _prepare(self, request: PrepareContextRequest, scope: ScopeDescriptor, /) -> PreparedContext:
         build, effort = await self._prepare_build(request, scope)
         if effort is not None and self._runtime._recall_effort_sink is not None:
