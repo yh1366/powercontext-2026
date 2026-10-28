@@ -855,11 +855,15 @@ class ScopedContextApplication:
         base_pack: object | None = None,
         authorize_scopes: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
     ) -> object:
-        from powercontext.builtin.runtime.context_pack import ContextPack, ContextPackDelta
+        from powercontext.builtin.runtime.context_pack import (
+            INCREMENTAL_CHUNK_BYTES,
+            ContextPack,
+            ContextPackDelta,
+        )
 
         prepared = await self.prepare(request, authorize_scopes=authorize_scopes)
         content_bytes = (prepared.content or "").encode("utf-8")
-        pack = ContextPack.build((content_bytes,))
+        pack = ContextPack.from_content(content_bytes, chunk_bytes=INCREMENTAL_CHUNK_BYTES)
 
         if base_pack is None:
             return pack
