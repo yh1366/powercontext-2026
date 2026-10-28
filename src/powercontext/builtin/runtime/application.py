@@ -488,6 +488,7 @@ class ScopedSourceApplication:
                             span.set_attributes({_MEMORY_CAPTURE_SOURCE_COUNT: 1})
             except BaseValueConflictError as error:
                 raise SourceConflictError("identity", error.identity) from None
+            self._runtime._wake_count_admission()
             return SourceReceipt(
                 source_ref=SourceRef(source_type=record.source_type, source_id=record.source_id),
                 sequence=record.position,
@@ -504,6 +505,7 @@ class ScopedSourceApplication:
                 )
                 if span is not None:
                     span.set_attributes({_MEMORY_CAPTURE_SOURCE_COUNT: 1})
+            self._runtime._wake_count_admission()
             return SourceReceipt(source_ref=context.sources.catalog.as_ref(source), sequence=sequence)
 
 
@@ -3004,6 +3006,7 @@ class BuiltinRuntime:
         capabilities: RuntimeCapabilities,
         code_service: CodeService | None = None,
         source_window_limit: int = 100,
+        source_count_thresholds: Mapping[str, int] | None = None,
         context_assembly_max_entries: int = 8,
         recall_sufficiency_policy: RecallSufficiencyPolicy | None = None,
         scope_cache_size: int = DEFAULT_SCOPE_CACHE_SIZE,
@@ -3108,6 +3111,8 @@ class BuiltinRuntime:
         self._scheduled_source_runner = scheduled_source_runner
         self._scheduled_experience_runner = scheduled_experience_runner
         self.source_window_limit = source_window_limit
+        # Bindings whose pending Source identities can launch a processing call.
+        self.source_count_thresholds = dict(source_count_thresholds or {})
         self.context_assembly_max_entries = context_assembly_max_entries
         self.recall_sufficiency_policy = recall_sufficiency_policy
         self._scope_cache = ScopeCache(
@@ -3157,6 +3162,19 @@ class BuiltinRuntime:
     async def capabilities(self) -> RuntimeCapabilities:
         async with self._operation():
             return self._capabilities
+
+    def _wake_count_admission(self) -> None:
+        """Wake processors that may have just reached their count threshold.
+
+        The durable invocation request is committed with the capture itself; this
+        wake only shortens the wait for the next supervisor tick.
+        """
+
+        supervisor = self.artifact_processing_supervisor
+        if supervisor is None or not self.source_count_thresholds:
+            return
+        for binding_name in self.source_count_thresholds:
+            supervisor.wake(binding_name)
 
     async def readiness(self) -> RuntimeReadiness:
         """Check whether the Runtime and its assembled dependencies can accept work."""

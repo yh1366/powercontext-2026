@@ -596,6 +596,7 @@ async def open_builtin_runtime(
                     prompts=dict(contexts.prompt_registry.capabilities),
                 ),
                 source_window_limit=config.runtime.source_window_limit,
+                source_count_thresholds=source_count_thresholds(config),
                 context_assembly_max_entries=config.runtime.context_assembly_max_entries,
                 recall_sufficiency_policy=RecallSufficiencyPolicy.from_runtime_config(config.runtime),
                 scope_cache_size=config.runtime.scope_cache_size,
@@ -853,6 +854,16 @@ async def _open_artifact_processing_supervisor(
         yield ArtifactProcessingSupervisors(tuple(supervisors))
 
 
+def source_count_thresholds(config: BuiltinConfig) -> dict[str, int]:
+    """Map configured launch thresholds onto the processors that consume Sources."""
+
+    declared = {
+        FAMILY_BINDINGS["memory"]: config.runtime.memory_source_count_threshold,
+        TOPIC_MEMORY_SOURCE_WINDOW_BINDING: config.runtime.topic_memory_source_count_threshold,
+    }
+    return {binding: threshold for binding, threshold in declared.items() if threshold is not None}
+
+
 @asynccontextmanager
 async def open_builtin_contexts(
     config: BuiltinConfig,
@@ -947,6 +958,7 @@ async def open_builtin_contexts(
                 model_usage_queue_capacity=config.runtime.model_usage_queue_capacity,
                 model_usage_write_timeout_seconds=config.runtime.model_usage_write_timeout_seconds,
                 model_usage_flush_timeout_seconds=config.runtime.model_usage_flush_timeout_seconds,
+                source_count_thresholds=source_count_thresholds(config),
                 source_registry=source_registry,
                 cursor_secret=cursor_secret,
                 tracing=tracing,
@@ -1024,6 +1036,7 @@ async def open_builtin_contexts(
             model_usage_queue_capacity=config.runtime.model_usage_queue_capacity,
             model_usage_write_timeout_seconds=config.runtime.model_usage_write_timeout_seconds,
             model_usage_flush_timeout_seconds=config.runtime.model_usage_flush_timeout_seconds,
+            source_count_thresholds=source_count_thresholds(config),
             source_registry=source_registry,
             cursor_secret=cursor_secret,
             tracing=tracing,

@@ -547,6 +547,7 @@ class RelationalContexts:
         model_usage_queue_capacity: int = 256,
         model_usage_write_timeout_seconds: float = 1.0,
         model_usage_flush_timeout_seconds: float = 0.5,
+        source_count_thresholds: Mapping[str, int] | None = None,
     ) -> None:
         self.database = database
         self.scopes = ScopeApplication(database, cursor_secret=cursor_secret)
@@ -554,7 +555,7 @@ class RelationalContexts:
         self.index = NoMemoryIndex() if index is None else index
         self.topic_memory_index = NoTopicMemoryIndex() if topic_memory_index is None else topic_memory_index
         self.experience_index = NoExperienceIndex() if experience_index is None else experience_index
-        source_repository = SourceRepository(self.source_registry)
+        source_repository = SourceRepository(self.source_registry, count_thresholds=source_count_thresholds)
         artifact_repository = ArtifactRepository(
             (Handoff, Memory, Experience, Skill, Profile, Prompt, TopicMemory),
             sources=source_repository,
@@ -1361,13 +1362,20 @@ class RelationalContexts:
         processing: ScopeInvocation | None = None,
         authorize_snapshot: MemorySnapshotAuthorizer | None = None,
         on_commit: MemoryCommitHook | None = None,
+        retrigger_threshold: int | None = None,
     ) -> MemoryFlushResult:
         services = self._services_for(scope_id)
         return await _RelationalTriggers(
             services=services,
             lock=self._activation_locks.setdefault(services.scope_id, asyncio.Lock()),
             tracing=self._tracing,
-        ).flush(limit=limit, processing=processing, authorize_snapshot=authorize_snapshot, on_commit=on_commit)
+        ).flush(
+            limit=limit,
+            processing=processing,
+            authorize_snapshot=authorize_snapshot,
+            on_commit=on_commit,
+            retrigger_threshold=retrigger_threshold,
+        )
 
     async def incubate_experience(
         self,
@@ -1603,6 +1611,21 @@ class _RelationalArtifactResolver:
             raise ArtifactNotFoundError(ref) from None
 
 
+def _remaining_reaches_threshold(*, through: int, high_watermark: int, threshold: int | None) -> bool:
+    """Decide whether unconsumed identities already justify the next invocation.
+
+    Without a launch threshold the pre-existing rule applies: any unconsumed
+    identity keeps the processor dirty. With a threshold, only a remainder that
+    still reaches it re-arms the processor, so one qualifying window never
+    drains the whole journal on its own.
+    """
+
+    remaining = high_watermark - through
+    if threshold is None:
+        return remaining > 0
+    return remaining >= threshold
+
+
 class _RelationalTriggers:
     def __init__(
         self,
@@ -1689,6 +1712,7 @@ class _RelationalTriggers:
         processing: ScopeInvocation | None = None,
         authorize_snapshot: MemorySnapshotAuthorizer | None = None,
         on_commit: MemoryCommitHook | None = None,
+        retrigger_threshold: int | None = None,
     ) -> MemoryFlushResult:
         async with self._lock:
             async with self._services.database.transaction() as connection:
@@ -1749,7 +1773,14 @@ class _RelationalTriggers:
                         before = prepared.result if prepared.commit is None else prepared.commit.base
                         await on_commit(connection, before, updated)
                     if processing is not None:
-                        await processing.complete(connection, remaining_work=action.through < high_watermark)
+                        await processing.complete(
+                            connection,
+                            remaining_work=_remaining_reaches_threshold(
+                                through=action.through,
+                                high_watermark=high_watermark,
+                                threshold=retrigger_threshold,
+                            ),
+                        )
             return MemoryFlushResult(
                 previous_cursor=action.after,
                 high_watermark=high_watermark,

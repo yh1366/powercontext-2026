@@ -30,6 +30,7 @@ from powercontext.builtin.artifacts.experience import EXPERIENCE_INCUBATION_CURS
 from powercontext.builtin.artifacts.profile.models import PROFILE_SOURCE_WINDOW_BINDING
 from powercontext.builtin.artifacts.topic_memory import TOPIC_MEMORY_SOURCE_WINDOW_BINDING
 from powercontext.builtin.persistence.codec import load_model, stored_bytes
+from powercontext.builtin.persistence.cursors import SourceCursorRepository
 from powercontext.builtin.persistence.errors import (
     IdentityMismatchError,
     InvalidRepositoryArgumentError,
@@ -79,12 +80,19 @@ class SourceRepository:
         self,
         definitions: SourceDefinitionRegistry | Iterable[_AnySourceAdapter],
         /,
+        *,
+        count_thresholds: Mapping[str, int] | None = None,
     ) -> None:
         self._registry = (
             definitions
             if isinstance(definitions, SourceDefinitionRegistry)
             else SourceDefinitionRegistry.from_adapters(definitions)
         )
+        # Per-binding launch thresholds. A captured identity that brings a
+        # processor's pending count up to its threshold accepts one ordinary
+        # invocation in the same transaction that published the identity.
+        self._count_thresholds = dict(count_thresholds or {})
+        self._cursors = SourceCursorRepository()
 
     async def add(
         self,
@@ -105,7 +113,24 @@ class SourceRepository:
         source: Source,
         /,
     ) -> tuple[StoredSource, bool]:
-        """Add one Source and report whether this call inserted its journal row."""
+        """Add one Source or return an identical existing capture."""
+
+        stored, created, _admitted = await self.add_with_admission(connection, scope_id, source)
+        return stored, created
+
+    async def add_with_admission(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        source: Source,
+        /,
+    ) -> tuple[StoredSource, bool, tuple[str, ...]]:
+        """Add one Source, report journal insertion, and admit count-threshold work.
+
+        A duplicate identity never contributes a journal row, so it can never
+        raise a pending count. The returned bindings are the processors whose
+        threshold this capture reached; the caller wakes exactly those.
+        """
 
         _require_identity("scope_id", scope_id, MAX_SCOPE_ID_LENGTH)
         if isinstance(source, SourceObservation):
@@ -138,10 +163,14 @@ class SourceRepository:
                     )
                     .values(payload=payload)
                 )
-                return StoredSource(ref=ref, value=source, journal_position=stored.journal_position), False
+                return (
+                    StoredSource(ref=ref, value=source, journal_position=stored.journal_position),
+                    False,
+                    (),
+                )
             if stored.value != source:
                 raise StoredPayloadConflictError("source", (scope_id, ref))
-            return stored, False
+            return stored, False, ()
 
         position = await _next_journal_position(connection, scope_id)
         try:
@@ -164,14 +193,71 @@ class SourceRepository:
             stored = self._decode_row(existing)
             if stored.value != source:
                 raise StoredPayloadConflictError("source", (scope_id, ref)) from None
-            return stored, False
+            return stored, False, ()
         # Centralized here so capture, record projection and import all publish
         # discoverable input atomically. Replayed Source identities do not dirty
         # a binding again. Disabled processors simply retain ordinary dirty.
         intents = ArtifactProcessingIntentRepository()
         for binding_name in SOURCE_PROCESSING_BINDINGS:
             await intents.mark_dirty(connection, scope_id, binding_name)
-        return StoredSource(ref=ref, value=source, journal_position=position), True
+        admitted = await self._admit_count_threshold(connection, scope_id, intents)
+        return StoredSource(ref=ref, value=source, journal_position=position), True, admitted
+
+    async def _admit_count_threshold(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        intents: ArtifactProcessingIntentRepository,
+        /,
+    ) -> tuple[str, ...]:
+        """Accept one invocation per binding whose pending identity count is reached.
+
+        Counting uses persisted journal identities strictly after the processor's
+        last successful cursor, so a duplicate capture, a receipt trust upgrade or
+        a consumed window can never inflate the count. An already accepted but
+        unfinished invocation is reused instead of stacking another one.
+        """
+
+        if not self._count_thresholds:
+            return ()
+        admitted: list[str] = []
+        for binding_name in sorted(self._count_thresholds):
+            threshold = self._count_thresholds[binding_name]
+            state = await self._cursors.load(connection, scope_id, binding_name)
+            cursor = 0 if state is None else state.cursor.sequence
+            pending = await self.count_after(connection, scope_id, cursor)
+            if pending < threshold:
+                continue
+            intent = await intents.load(connection, scope_id, binding_name, for_update=True)
+            if intent is not None and intent.requested_generation > intent.handled_generation:
+                continue
+            await intents.request(connection, scope_id, binding_name)
+            admitted.append(binding_name)
+        return tuple(admitted)
+
+    async def count_after(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        after: int,
+        /,
+    ) -> int:
+        """Count persisted journal identities positioned strictly after one cursor."""
+
+        _require_identity("scope_id", scope_id, MAX_SCOPE_ID_LENGTH)
+        if not isinstance(after, int) or isinstance(after, bool) or after < 0:
+            raise InvalidRepositoryArgumentError("after", "must be a non-negative integer")
+        return int(
+            await connection.scalar(
+                select(func.count())
+                .select_from(SOURCES_TABLE)
+                .where(
+                    SOURCES_TABLE.c.scope_id == scope_id,
+                    SOURCES_TABLE.c.journal_position > after,
+                )
+            )
+            or 0
+        )
 
     async def get(
         self,

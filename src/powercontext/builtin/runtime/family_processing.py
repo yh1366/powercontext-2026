@@ -209,6 +209,7 @@ async def _process_family_invocation(  # noqa: C901 - one guarded dispatch per r
                 processing=invocation,
                 authorize_snapshot=None if security is None else partial(security.authorize_memory, scope),
                 on_commit=None if security is None else partial(security.memory_commit, scope_id=scope),
+                retrigger_threshold=config.runtime.memory_source_count_threshold,
             )
             if result.held_count:
                 return ArtifactProcessingWorkerCompletion(held_count=result.held_count, hold_codes=result.hold_codes)
