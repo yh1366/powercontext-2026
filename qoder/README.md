@@ -2,6 +2,11 @@
 
 基于 **PowerContext** 记忆引擎 + **seekdb** 混合检索的智能学习助手。
 
+> **⚠️ 竞赛评审说明**  
+> 在线演示站点 https://studymind-arwd9qi4cqr.qoder.zone 因部署平台限制，后端 API 暂时无法访问。  
+> **请按照下方"快速开始"在本地运行完整功能**，所有功能均已测试通过。  
+> 代码已提交至本仓库，commit: `004cc92`，分支: `main`。
+
 ## 项目简介
 
 StudyMind 解决学习过程中的核心痛点：笔记分散难检索、学习进度无法追踪、薄弱知识点容易遗忘。通过 PowerContext 实现学习记忆的持久化存储与跨会话复用，通过 seekdb 实现知识资料的语义+关键词混合检索，让学习助手"越用越懂你"。
@@ -86,6 +91,60 @@ npm start
 
 # 访问 http://localhost:5000
 ```
+
+### 功能验证测试
+
+启动服务后，可以使用以下命令验证所有核心功能：
+
+```bash
+# 1. 健康检查
+curl http://localhost:5000/health
+# 预期输出: {"status":"ok","powercontext":true,"seekdb":true,...}
+
+# 2. 加载示例数据（5条学习资料）
+curl -X POST http://localhost:5000/load-samples
+# 预期输出: {"status":"loaded","count":5,...}
+
+# 3. 搜索功能（中文分词检索）
+curl "http://localhost:5000/materials/search?q=数据库&limit=10"
+# 预期输出: 返回3条数据库相关资料
+
+# 4. 添加学习资料
+curl -X POST http://localhost:5000/materials \
+  -H "Content-Type: application/json" \
+  -d '{"title":"测试资料","content":"这是测试内容","subject":"测试","topic":"API测试","type":"note","tags":["test"]}'
+# 预期输出: {"status":"created","id":"..."}
+
+# 5. 保存学习进度
+curl -X POST http://localhost:5000/progress \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"Python编程","topic":"列表推导式","progress":75,"notes":"需要多练习"}'
+# 预期输出: {"status":"saved"}
+
+# 6. 记录薄弱知识点
+curl -X POST http://localhost:5000/weak-points \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"机器学习","topic":"反向传播","description":"梯度消失问题难以理解"}'
+# 预期输出: {"status":"saved"}
+
+# 7. 获取进度汇总
+curl http://localhost:5000/progress/summary
+# 预期输出: {"total_memories":2,"memories":[...]}
+
+# 8. 生成测试题
+curl -X POST http://localhost:5000/quiz/generate \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"Python编程","count":3}'
+# 预期输出: {"status":"generated","quiz":{"questions":[...]}}
+
+# 9. 智能问答
+curl -X POST http://localhost:5000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"什么是向量检索？"}'
+# 预期输出: {"status":"success","answer":"...","context_sources":{...}}
+```
+
+所有 API 端点均已测试通过，支持完整的 CRUD 操作和智能检索功能。
 
 ### 安装步骤（Python 版本）
 
