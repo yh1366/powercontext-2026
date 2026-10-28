@@ -3,9 +3,13 @@
  * All external API calls have 2s timeout + in-memory fallback
  */
 
-// ---- Config (no env dependency for portability) ----
-const POWERCONTEXT_BASE = 'http://localhost:8848';
-const SCOPE_ID = 'default_learning_scope';
+// ---- Config (read from env with safe fallbacks) ----
+function getEnv(key: string, fallback: string): string {
+  try { return Deno.env.get(key) || fallback; } catch { return fallback; }
+}
+const POWERCONTEXT_BASE = getEnv('POWERCONTEXT_API_URL', 'http://localhost:8848');
+const SCOPE_ID = getEnv('POWERCONTEXT_SCOPE_ID', 'default_learning_scope');
+const BACKEND_BASE = getEnv('BACKEND_API_URL', '');
 
 // ---- Types ----
 interface Mem { id: string; content: string; family: string; metadata: Record<string, unknown>; ts: string }
@@ -109,11 +113,21 @@ async function pcCreateHandoff(desc: string, steps: string[]): Promise<void> {
   } catch { /* ignore */ }
 }
 
-// ---- seekdb API (via backend proxy or direct) ----
+// ---- seekdb API (via backend proxy) ----
 
 async function seekdbAdd(title: string, content: string, subject: string, topic: string, type = "note", tags: string[] = []): Promise<{ id: string; status: string }> {
   const entry: Mat = { id: `mat_${++matCtr}`, title, content, subject, topic, type, tags, ts: new Date().toISOString() };
-  // Attempt seekdb via pyseekdb-compatible REST endpoint
+  if (BACKEND_BASE) {
+    try {
+      const r = await safeFetch(`${BACKEND_BASE}/api/materials`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, content, subject, topic, type, tags }),
+      });
+      if (r && r.ok) { const d = await r.json(); return { id: d.id || entry.id, status: "stored_in_seekdb" }; }
+    } catch { /* fallback */ }
+  }
+  // Also attempt via PowerContext scope materials endpoint
   try {
     const r = await safeFetch(`${POWERCONTEXT_BASE}/api/v1/scopes/${SCOPE_ID}/materials`, {
       method: "POST",
@@ -127,6 +141,14 @@ async function seekdbAdd(title: string, content: string, subject: string, topic:
 }
 
 async function seekdbSearch(query: string, subject?: string, limit = 5): Promise<Array<{ content: string; metadata: Record<string, unknown>; score: number }>> {
+  if (BACKEND_BASE) {
+    try {
+      const params = new URLSearchParams({ q: query, limit: String(limit) });
+      if (subject) params.set("subject", subject);
+      const r = await safeFetch(`${BACKEND_BASE}/api/materials/search?${params}`);
+      if (r && r.ok) { const d = await r.json(); return d.results || []; }
+    } catch { /* fallback */ }
+  }
   try {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     if (subject) params.set("subject", subject);
