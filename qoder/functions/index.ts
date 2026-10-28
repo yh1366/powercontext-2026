@@ -3,8 +3,17 @@
  * Integrates PowerContext (memory/context) + seekdb (knowledge retrieval) via HTTP APIs
  */
 
-const POWERCONTEXT_BASE = Deno.env.get('POWERCONTEXT_API_URL') || 'http://localhost:8848';
-const SCOPE_ID = Deno.env.get('POWERCONTEXT_SCOPE_ID') || 'default_learning_scope';
+function safeEnvGet(key: string, fallback: string): string {
+  try {
+    return Deno.env.get(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const POWERCONTEXT_BASE = safeEnvGet('POWERCONTEXT_API_URL', 'http://localhost:8848');
+const SCOPE_ID = safeEnvGet('POWERCONTEXT_SCOPE_ID', 'default_learning_scope');
+const BACKEND_BASE = safeEnvGet('BACKEND_API_URL', '');
 
 interface Mem { id: string; content: string; family: string; metadata: Record<string, unknown>; ts: string }
 interface Mat { id: string; title: string; content: string; subject: string; topic: string; type: string; tags: string[]; ts: string }
@@ -117,8 +126,6 @@ async function pcCreateHandoff(workDescription: string, nextSteps: string[]): Pr
 // ---- seekdb via backend proxy ----
 // seekdb uses pyseekdb (Python library), not directly callable from Deno.
 // We route material operations through the backend which has the Python client.
-
-const BACKEND_BASE = Deno.env.get('BACKEND_API_URL') || '';
 
 async function seekdbAddMaterial(title: string, content: string, subject: string, topic: string, materialType = 'note', tags: string[] = []): Promise<{ id: string; status: string }> {
   if (BACKEND_BASE) {
