@@ -1,0 +1,15 @@
+node_modules/
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.db
+*.sqlite
+seekdb-data/
+.DS_Store
+Thumbs.db
+studymind-deploy/
+*.qoder.site
+.powercontext-scope.json

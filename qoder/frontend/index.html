@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StudyMind - 智学伴侣</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="deploy-notice" id="deployNotice" style="display:none;">
+        <div class="deploy-notice-content">
+            <i class="fas fa-info-circle"></i>
+            <div>
+                <strong>在线演示模式</strong> — 站点运行在 Qoder Sites 边缘函数，数据存于函数内存，刷新后重置。
+                seekdb 混合检索与 PowerContext 记忆的完整链路请按
+                <a href="https://github.com/yh1366/powercontext-2026/blob/main/qoder/README.md" target="_blank">运行说明</a>在本地启动，
+                可核对的验证输出见
+                <a href="https://github.com/yh1366/powercontext-2026/blob/main/qoder/docs/evidence.md" target="_blank">验证记录</a>。
+            </div>
+            <button onclick="document.getElementById('deployNotice').style.display='none'" style="background:none;border:none;color:inherit;cursor:pointer;font-size:18px;">&times;</button>
+        </div>
+    </div>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-brain"></i>
+                    <span>StudyMind</span>
+                </div>
+                <p class="tagline">智学伴侣</p>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-page="dashboard">
+                    <i class="fas fa-home"></i>
+                    <span>学习仪表盘</span>
+                </a>
+                <a href="#" class="nav-item" data-page="materials">
+                    <i class="fas fa-book"></i>
+                    <span>知识库</span>
+                </a>
+                <a href="#" class="nav-item" data-page="search">
+                    <i class="fas fa-search"></i>
+                    <span>智能检索</span>
+                </a>
+                <a href="#" class="nav-item" data-page="progress">
+                    <i class="fas fa-chart-line"></i>
+                    <span>学习进度</span>
+                </a>
+                <a href="#" class="nav-item" data-page="quiz">
+                    <i class="fas fa-clipboard-check"></i>
+                    <span>自我测试</span>
+                </a>
+                <a href="#" class="nav-item" data-page="ask">
+                    <i class="fas fa-comments"></i>
+                    <span>智能问答</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="tech-badges">
+                    <span class="badge badge-pc" title="PowerContext">
+                        <i class="fas fa-database"></i> PowerContext
+                    </span>
+                    <span class="badge badge-sdb" title="seekdb">
+                        <i class="fas fa-vector-square"></i> seekdb
+                    </span>
+                </div>
+                <div class="status-indicator" id="statusIndicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text">检查连接中...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Dashboard Page -->
+            <div class="page active" id="page-dashboard">
+                <div class="page-header">
+                    <h1>学习仪表盘</h1>
+                    <p>你的智能学习伙伴，基于 PowerContext 记忆引擎 + seekdb 混合检索</p>
+                </div>
+                <div class="dashboard-grid">
+                    <div class="card card-welcome">
+                        <div class="card-icon"><i class="fas fa-rocket"></i></div>
+                        <h3>快速开始</h3>
+                        <p>加载示例数据来体验完整功能</p>
+                        <button class="btn btn-primary" onclick="loadSampleData()">
+                            <i class="fas fa-download"></i> 加载示例数据
+                        </button>
+                    </div>
+                    <div class="card card-stat">
+                        <div class="card-icon"><i class="fas fa-book-open"></i></div>
+                        <h3>知识条目</h3>
+                        <div class="stat-number" id="statMaterials">0</div>
+                        <p>已收录学习资料</p>
+                    </div>
+                    <div class="card card-stat">
+                        <div class="card-icon"><i class="fas fa-brain"></i></div>
+                        <h3>记忆条目</h3>
+                        <div class="stat-number" id="statMemories">0</div>
+                        <p>PowerContext 已存储</p>
+                    </div>
+                    <div class="card card-stat">
+                        <div class="card-icon"><i class="fas fa-search"></i></div>
+                        <h3>检索次数</h3>
+                        <div class="stat-number" id="statSearches">0</div>
+                        <p>混合检索已执行</p>
+                    </div>
+                    <div class="card card-feature">
+                        <h3><i class="fas fa-cogs"></i> 技术架构</h3>
+                        <div class="tech-stack">
+                            <div class="tech-item">
+                                <strong>PowerContext</strong>
+                                <span>记忆管理 / 学习进度追踪 / 上下文保持 / 经验记录</span>
+                            </div>
+                            <div class="tech-item">
+                                <strong>seekdb</strong>
+                                <span>向量检索 / 全文搜索 / 混合查询 / 知识存储</span>
+                            </div>
+                            <div class="tech-item">
+                                <strong>Qoder</strong>
+                                <span>项目开发 / 智能编码 / 调试 / 部署</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card card-feature">
+                        <h3><i class="fas fa-lightbulb"></i> 核心功能</h3>
+                        <ul class="feature-list">
+                            <li><i class="fas fa-check-circle"></i> 智能知识库管理</li>
+                            <li><i class="fas fa-check-circle"></i> 语义 + 关键词混合检索</li>
+                            <li><i class="fas fa-check-circle"></i> 学习进度自动追踪</li>
+                            <li><i class="fas fa-check-circle"></i> 薄弱知识点记录</li>
+                            <li><i class="fas fa-check-circle"></i> 个性化学习推荐</li>
+                            <li><i class="fas fa-check-circle"></i> 学习会话连续性</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Materials Page -->
+            <div class="page" id="page-materials">
+                <div class="page-header">
+                    <h1>知识库管理</h1>
+                    <p>添加和管理你的学习资料，数据存储在 seekdb 中</p>
+                </div>
+                <div class="card">
+                    <h3><i class="fas fa-plus-circle"></i> 添加学习资料</h3>
+                    <form id="addMaterialForm" class="form-grid">
+                        <div class="form-group">
+                            <label>标题</label>
+                            <input type="text" id="matTitle" placeholder="例如：Python 装饰器详解" required>
+                        </div>
+                        <div class="form-group">
+                            <label>学科</label>
+                            <input type="text" id="matSubject" placeholder="例如：Python编程" required>
+                        </div>
+                        <div class="form-group">
+                            <label>主题</label>
+                            <input type="text" id="matTopic" placeholder="例如：装饰器与元编程" required>
+                        </div>
+                        <div class="form-group">
+                            <label>类型</label>
+                            <select id="matType">
+                                <option value="note">笔记</option>
+                                <option value="concept">概念</option>
+                                <option value="paper">论文摘要</option>
+                                <option value="formula">公式/定理</option>
+                            </select>
+                        </div>
+                        <div class="form-group full-width">
+                            <label>内容</label>
+                            <textarea id="matContent" rows="5" placeholder="输入学习内容的详细描述..." required></textarea>
+                        </div>
+                        <div class="form-group full-width">
+                            <label>标签（逗号分隔）</label>
+                            <input type="text" id="matTags" placeholder="例如：python, 装饰器, 高级特性">
+                        </div>
+                        <div class="form-group full-width">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-save"></i> 保存到知识库
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="card" id="materialList">
+                    <h3><i class="fas fa-list"></i> 已有资料</h3>
+                    <div id="materialListContent">
+                        <p class="empty-state">暂无资料，请添加或加载示例数据</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Search Page -->
+            <div class="page" id="page-search">
+                <div class="page-header">
+                    <h1>智能检索</h1>
+                    <p>基于 seekdb 的混合检索：向量语义搜索 + 全文关键词匹配</p>
+                </div>
+                <div class="card">
+                    <div class="search-bar">
+                        <input type="text" id="searchInput" placeholder="输入关键词或描述你想找的内容..." class="search-input">
+                        <select id="searchSubject" class="search-filter">
+                            <option value="">全部学科</option>
+                            <option value="Python编程">Python编程</option>
+                            <option value="机器学习">机器学习</option>
+                            <option value="数据库系统">数据库系统</option>
+                            <option value="计算机网络">计算机网络</option>
+                        </select>
+                        <select id="searchType" class="search-filter">
+                            <option value="hybrid">混合检索</option>
+                            <option value="vector">语义检索</option>
+                            <option value="fulltext">关键词检索</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="performSearch()">
+                            <i class="fas fa-search"></i> 搜索
+                        </button>
+                    </div>
+                </div>
+                <div id="searchResults" class="search-results">
+                    <p class="empty-state">输入关键词开始检索</p>
+                </div>
+            </div>
+
+            <!-- Progress Page -->
+            <div class="page" id="page-progress">
+                <div class="page-header">
+                    <h1>学习进度</h1>
+                    <p>PowerContext 记忆引擎追踪你的学习历程</p>
+                </div>
+                <div class="card">
+                    <h3><i class="fas fa-plus-circle"></i> 更新进度</h3>
+                    <form id="progressForm" class="form-grid">
+                        <div class="form-group">
+                            <label>学科</label>
+                            <input type="text" id="progSubject" placeholder="例如：Python编程" required>
+                        </div>
+                        <div class="form-group">
+                            <label>主题</label>
+                            <input type="text" id="progTopic" placeholder="例如：列表推导式" required>
+                        </div>
+                        <div class="form-group">
+                            <label>完成度</label>
+                            <input type="range" id="progPercent" min="0" max="100" value="50" class="progress-slider">
+                            <span id="progPercentLabel">50%</span>
+                        </div>
+                        <div class="form-group">
+                            <label>备注</label>
+                            <input type="text" id="progNotes" placeholder="例如：需要多做练习">
+                        </div>
+                        <div class="form-group full-width">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-save"></i> 保存进度
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="card">
+                    <h3><i class="fas fa-exclamation-triangle"></i> 记录薄弱知识点</h3>
+                    <form id="weakPointForm" class="form-grid">
+                        <div class="form-group">
+                            <label>学科</label>
+                            <input type="text" id="wpSubject" placeholder="例如：机器学习" required>
+                        </div>
+                        <div class="form-group">
+                            <label>主题</label>
+                            <input type="text" id="wpTopic" placeholder="例如：反向传播" required>
+                        </div>
+                        <div class="form-group full-width">
+                            <label>描述</label>
+                            <textarea id="wpDescription" rows="3" placeholder="描述你觉得困难的地方..." required></textarea>
+                        </div>
+                        <div class="form-group full-width">
+                            <button type="submit" class="btn btn-warning">
+                                <i class="fas fa-flag"></i> 记录薄弱点
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="card">
+                    <h3><i class="fas fa-history"></i> 学习记录</h3>
+                    <div id="progressList">
+                        <p class="empty-state">暂无学习记录</p>
+                        <button class="btn btn-secondary" onclick="loadProgressSummary()">
+                            <i class="fas fa-sync"></i> 刷新记录
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quiz Page -->
+            <div class="page" id="page-quiz">
+                <div class="page-header">
+                    <h1>自我测试</h1>
+                    <p>基于知识库自动生成测试题，检验学习效果</p>
+                </div>
+                <div class="card">
+                    <h3><i class="fas fa-cog"></i> 生成测试</h3>
+                    <form id="quizForm" class="form-grid">
+                        <div class="form-group">
+                            <label>学科</label>
+                            <input type="text" id="quizSubject" placeholder="例如：Python编程">
+                        </div>
+                        <div class="form-group">
+                            <label>主题</label>
+                            <input type="text" id="quizTopic" placeholder="例如：列表推导式">
+                        </div>
+                        <div class="form-group">
+                            <label>题目数量</label>
+                            <input type="number" id="quizCount" min="1" max="10" value="3">
+                        </div>
+                        <div class="form-group full-width">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-magic"></i> 生成测试
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div id="quizResult" class="card" style="display:none;">
+                    <h3><i class="fas fa-clipboard-check"></i> 测试题目</h3>
+                    <div id="quizContent"></div>
+                </div>
+            </div>
+
+            <!-- Ask Page -->
+            <div class="page" id="page-ask">
+                <div class="page-header">
+                    <h1>智能问答</h1>
+                    <p>基于 PowerContext 记忆 + seekdb 知识库的智能问答</p>
+                </div>
+                <div class="card">
+                    <div class="chat-container">
+                        <div class="chat-messages" id="chatMessages">
+                            <div class="chat-message assistant">
+                                <div class="chat-avatar"><i class="fas fa-robot"></i></div>
+                                <div class="chat-bubble">
+                                    <p>你好！我是 StudyMind 智能助手。我可以基于你的知识库和学习记录来回答问题。</p>
+                                    <p>试试问我：</p>
+                                    <ul>
+                                        <li>"Python 列表推导式怎么用？"</li>
+                                        <li>"什么是向量检索？"</li>
+                                        <li>"数据库索引有哪些类型？"</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="chat-input-area">
+                            <input type="text" id="chatInput" placeholder="输入你的问题..." class="chat-input">
+                            <button class="btn btn-primary" onclick="sendQuestion()">
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>
