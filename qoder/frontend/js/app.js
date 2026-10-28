@@ -1,4 +1,9 @@
-const API_BASE = window.location.origin + '/functions/v1/app';
+// Qoder Sites 上后端挂在 Edge Function 路径下；本地 Flask 后端使用 /api 前缀
+const API_BASE = window.STUDYMIND_API_BASE || (
+    ['5000', '8000'].includes(window.location.port)
+        ? window.location.origin + '/api'
+        : window.location.origin + '/functions/v1/app'
+);
 let searchCount = 0;
 
 // --------------- Navigation ---------------
@@ -33,7 +38,11 @@ async function checkHealth() {
             const parts = [];
             if (data.powercontext) parts.push('PowerContext');
             if (data.seekdb) parts.push('seekdb');
-            text.textContent = parts.length ? `${parts.join(' + ')} 已连接` : '本地模式运行中';
+            if (data.mode === 'degraded') {
+                text.textContent = '演示模式（边缘函数内存）';
+            } else {
+                text.textContent = parts.length ? `${parts.join(' + ')} 已连接` : '本地模式运行中';
+            }
         } else {
             dot.className = 'status-dot offline';
             text.textContent = '服务未就绪';

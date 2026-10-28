@@ -173,7 +173,25 @@ async function handler(request: Request): Promise<Response> {
     }
 
     if (path === "/health" && method === "GET") {
-      return ok({ status: "ok", powercontext: true, seekdb: true, mode: "integrated", timestamp: new Date().toISOString() });
+      // Edge runtime cannot reach a local seekdb (MySQL protocol) or a local
+      // PowerContext server, so this deployment runs in demo mode. Report the
+      // real state instead of pretending both stores are connected.
+      let pcLive = false;
+      try {
+        const r = await timedFetch(`${PC_BASE}/health/ready`);
+        pcLive = !!(r && r.ok);
+      } catch { pcLive = false; }
+      return ok({
+        status: "ok",
+        powercontext: pcLive,
+        seekdb: false,
+        mode: "degraded",
+        seekdb_backend: "memory-fallback",
+        powercontext_backend: pcLive ? "powercontext" : "memory-fallback",
+        material_count: matStore.length,
+        note: "Qoder Sites demo mode: data lives in edge-function memory. Run qoder/backend locally for the real seekdb + PowerContext path.",
+        timestamp: new Date().toISOString(),
+      });
     }
 
     if (path === "/materials" && method === "POST") {

@@ -24,7 +24,7 @@ from seekdb_client import SeekDBClient, FallbackMaterialStore
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__, static_folder='../frontend', static_url_path='')
+app = Flask(__name__, static_folder='../frontend', static_url_path='/static')
 CORS(app)
 
 # Initialize PowerContext client (with fallback)
@@ -80,10 +80,16 @@ def serve_assets(filename):
 
 @app.route('/api/health')
 def health():
+    seekdb_live = isinstance(material_client, SeekDBClient) and material_client.health_check()
+    pc_live = isinstance(memory_client, PowerContextClient) and memory_client.health_check()
     return jsonify({
         'status': 'ok',
-        'powercontext': memory_client.health_check(),
-        'seekdb': material_client.health_check(),
+        'powercontext': pc_live,
+        'seekdb': seekdb_live,
+        'mode': 'full' if (seekdb_live and pc_live) else 'degraded',
+        'seekdb_backend': 'seekdb' if seekdb_live else 'memory-fallback',
+        'powercontext_backend': 'powercontext' if pc_live else 'memory-fallback',
+        'material_count': material_client.count(),
         'timestamp': datetime.now().isoformat(),
     })
 
@@ -154,10 +160,7 @@ def search_materials():
 def list_materials():
     """List all materials, optionally filtered by subject."""
     subject = request.args.get('subject', None)
-    if isinstance(material_client, FallbackMaterialStore):
-        materials = material_client.get_all_materials(subject)
-    else:
-        materials = material_client.search(subject=subject) if subject else []
+    materials = material_client.list_materials(subject)
     return jsonify({'materials': materials, 'count': len(materials)})
 
 
@@ -492,7 +495,14 @@ def load_sample_data():
 
     results = []
     for s in samples:
-        result = material_client.add_material(**s)
+        result = material_client.add_material(
+            title=s['title'],
+            content=s['content'],
+            subject=s['subject'],
+            topic=s['topic'],
+            material_type=s.get('type', 'note'),
+            tags=s.get('tags', []),
+        )
         memory_client.save_memory(
             content=f'Sample material loaded: {s["title"]} ({s["subject"]})',
             memory_type='topic',

@@ -12,3 +12,4 @@ seekdb-data/
 Thumbs.db
 studymind-deploy/
 *.qoder.site
+.powercontext-scope.json
