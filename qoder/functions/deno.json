@@ -1,0 +1,10 @@
+{
+  "name": "studymind-functions",
+  "version": "1.0.0",
+  "tasks": {
+    "start": "deno serve --allow-net --allow-env index.ts"
+  },
+  "compilerOptions": {
+    "lib": ["deno.window"]
+  }
+}
