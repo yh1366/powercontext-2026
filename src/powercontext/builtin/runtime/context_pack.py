@@ -64,6 +64,9 @@ class ContextPack:
 
     @classmethod
     def build(cls, items: tuple[bytes, ...]) -> Self:
+        items = tuple(
+            item.encode("utf-8") if isinstance(item, str) else bytes(item) for item in items
+        )
         encoded = [base64.b64encode(item).decode("ascii") for item in items]
         unsigned = {
             "schema": "powercontext.context-pack.v1",

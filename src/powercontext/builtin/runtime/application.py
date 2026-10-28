@@ -850,9 +850,8 @@ class ScopedContextApplication:
     async def prepare_incremental(
         self,
         request: PrepareContextRequest,
-        /,
-        *,
         base_pack: object | None = None,
+        *,
         authorize_scopes: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
     ) -> object:
         from powercontext.builtin.runtime.context_pack import (
