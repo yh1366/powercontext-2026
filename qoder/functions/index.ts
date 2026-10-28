@@ -1,9 +1,3 @@
-/**
- * StudyMind Edge Function for Qoder Sites
- * Handles all API routes for the learning assistant
- * Integrates PowerContext (memory) + seekdb (knowledge retrieval) concepts
- */
-
 interface Mem { id: string; content: string; family: string; metadata: Record<string, unknown>; ts: string }
 interface Mat { id: string; title: string; content: string; subject: string; topic: string; type: string; tags: string[]; ts: string }
 
@@ -68,26 +62,29 @@ function loadSampleData(): Array<{ id: string; status: string }> {
   });
 }
 
-function jsonResponse(data: unknown, status = 200): Response {
+function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
 }
 
-function extractPath(request: Request): string {
-  const pathname = new URL(request.url).pathname;
-  if (pathname.startsWith("/app/")) return "/" + pathname.slice(5);
-  if (pathname === "/app") return "/";
-  if (pathname.startsWith("/functions/v1/app/")) return "/" + pathname.slice("/functions/v1/app/".length);
-  if (pathname === "/functions/v1/app") return "/";
-  return pathname;
+function normalizePath(rawPath: string): string {
+  const match = rawPath.match(/^\/app(?:-[a-z0-9]+)?(\/.*)?$/);
+  if (match) {
+    return match[1] || "/";
+  }
+  if (rawPath.startsWith("/functions/v1/app/")) {
+    return "/" + rawPath.slice("/functions/v1/app/".length);
+  }
+  if (rawPath === "/functions/v1/app") return "/";
+  return rawPath;
 }
 
 async function handler(request: Request): Promise<Response> {
   const method = request.method;
-  const path = extractPath(request);
-  const params = new URL(request.url).searchParams;
+  const url = new URL(request.url);
+  const path = normalizePath(url.pathname);
 
   if (method === "OPTIONS") {
     return new Response(null, {
@@ -100,9 +97,8 @@ async function handler(request: Request): Promise<Response> {
   }
 
   try {
-    // Health check
     if (path === "/health" && method === "GET") {
-      return jsonResponse({
+      return json({
         status: "ok",
         powercontext: true,
         seekdb: true,
@@ -111,79 +107,72 @@ async function handler(request: Request): Promise<Response> {
       });
     }
 
-    // Add material
     if (path === "/materials" && method === "POST") {
       const body = await request.json() as Record<string, string | string[]>;
       if (!body.title || !body.content || !body.subject || !body.topic) {
-        return jsonResponse({ error: "Missing required fields: title, content, subject, topic" }, 400);
+        return json({ error: "Missing required fields: title, content, subject, topic" }, 400);
       }
       const result = addMaterial(
         body.title as string, body.content as string, body.subject as string,
         body.topic as string, (body.type as string) || "note", (body.tags as string[]) || []
       );
       addMemory(`Material: ${body.title} (${body.subject})`, "topic", { subject: body.subject, title: body.title });
-      return jsonResponse({ id: result.id, status: "stored" }, 201);
+      return json({ id: result.id, status: "stored" }, 201);
     }
 
-    // List materials
     if (path === "/materials" && method === "GET") {
-      const subject = params.get("subject");
+      const subject = url.searchParams.get("subject");
       const list = subject ? materials.filter(m => m.subject === subject) : materials;
-      return jsonResponse({ materials: list, count: list.length });
+      return json({ materials: list, count: list.length });
     }
 
-    // Search materials
     if (path === "/materials/search" && method === "GET") {
-      const q = params.get("q");
-      if (!q) return jsonResponse({ error: "Query parameter q is required" }, 400);
-      const limit = parseInt(params.get("limit") || "5");
+      const q = url.searchParams.get("q");
+      if (!q) return json({ error: "Query parameter q is required" }, 400);
+      const limit = parseInt(url.searchParams.get("limit") || "5");
       const results = searchMaterials(q, limit);
       addMemory(`Search: "${q}", ${results.length} results`, "insight", { query: q, result_count: results.length });
-      return jsonResponse({ query: q, count: results.length, results });
+      return json({ query: q, count: results.length, results });
     }
 
-    // Update progress
     if (path === "/progress" && method === "POST") {
       const body = await request.json() as Record<string, unknown>;
       if (!body.subject || !body.topic || body.progress === undefined) {
-        return jsonResponse({ error: "Missing: subject, topic, progress" }, 400);
+        return json({ error: "Missing: subject, topic, progress" }, 400);
       }
       const result = addMemory(
         `Progress: ${body.subject} > ${body.topic} = ${body.progress}%. ${body.notes || ""}`,
         "topic",
         { subject: body.subject, topic: body.topic, progress: body.progress }
       );
-      return jsonResponse(result, 201);
+      return json(result, 201);
     }
 
-    // Progress summary
     if (path === "/progress/summary" && method === "GET") {
-      const subject = params.get("subject");
+      const subject = url.searchParams.get("subject");
       const query = subject ? `progress ${subject}` : "all progress";
       const matched = recallMemories(query, 50);
-      return jsonResponse({ total_memories: matched.length, memories: matched, subject });
+      return json({ total_memories: matched.length, memories: matched, subject });
     }
 
-    // Add weak point
     if (path === "/weak-points" && method === "POST") {
       const body = await request.json() as Record<string, string>;
       if (!body.subject || !body.topic || !body.description) {
-        return jsonResponse({ error: "Missing: subject, topic, description" }, 400);
+        return json({ error: "Missing: subject, topic, description" }, 400);
       }
       const result = addMemory(
         `Weak point: ${body.subject} > ${body.topic} - ${body.description}`,
         "insight",
         { type: "weak_point", subject: body.subject, topic: body.topic }
       );
-      return jsonResponse(result, 201);
+      return json(result, 201);
     }
 
-    // Recommendations
     if (path === "/recommendations" && method === "GET") {
-      const subject = params.get("subject") || "";
+      const subject = url.searchParams.get("subject") || "";
       const mems = recallMemories(`study progress ${subject}`, 20);
       const mats = searchMaterials(subject || "study", 5);
-      return jsonResponse({
+      return json({
         based_on_memories: mems.length,
         suggested_materials: mats.slice(0, 3),
         focus_areas: mems.filter(m => m.content.includes("Weak")).map(m => m.content),
@@ -191,14 +180,13 @@ async function handler(request: Request): Promise<Response> {
       });
     }
 
-    // Generate quiz
     if (path === "/quiz/generate" && method === "POST") {
       const body = await request.json() as Record<string, unknown>;
       const query = `${(body.subject as string) || ""} ${(body.topic as string) || ""}`.trim() || "study";
       const mats = searchMaterials(query, ((body.count as number) || 5) * 2);
-      if (!mats.length) return jsonResponse({ error: "No materials found", quiz: null }, 404);
+      if (!mats.length) return json({ error: "No materials found", quiz: null }, 404);
       const count = Math.min((body.count as number) || 5, mats.length);
-      return jsonResponse({
+      return json({
         subject: body.subject || "",
         topic: body.topic || "",
         generated_at: new Date().toISOString(),
@@ -211,11 +199,10 @@ async function handler(request: Request): Promise<Response> {
       });
     }
 
-    // Start session
     if (path === "/session/start" && method === "POST") {
       const body = await request.json() as Record<string, string>;
       const context = recallMemories(`study ${body.subject || "General"}`, 10);
-      return jsonResponse({
+      return json({
         session_id: Date.now().toString(),
         subject: body.subject || "General",
         goal: body.goal || "",
@@ -224,17 +211,15 @@ async function handler(request: Request): Promise<Response> {
       });
     }
 
-    // End session
     if (path === "/session/end" && method === "POST") {
       const body = await request.json() as Record<string, unknown>;
       addMemory(`Session ${body.session_id}: ${body.summary}`, "topic", { session_id: body.session_id });
-      return jsonResponse({ status: "saved", session_id: body.session_id });
+      return json({ status: "saved", session_id: body.session_id });
     }
 
-    // Ask question
     if (path === "/ask" && method === "POST") {
       const body = await request.json() as Record<string, string>;
-      if (!body.question) return jsonResponse({ error: "Question required" }, 400);
+      if (!body.question) return json({ error: "Question required" }, 400);
       const memResults = recallMemories(body.question, 10);
       const matResults = searchMaterials(body.question, 5);
       const parts: string[] = [];
@@ -262,7 +247,7 @@ async function handler(request: Request): Promise<Response> {
         if (meta.subject) topics.add(meta.subject);
         if (meta.topic) topics.add(meta.topic);
       });
-      return jsonResponse({
+      return json({
         question: body.question,
         context_sources: { memories: memResults, materials: matResults },
         answer: parts.join(""),
@@ -270,15 +255,14 @@ async function handler(request: Request): Promise<Response> {
       });
     }
 
-    // Load sample data
     if (path === "/load-samples" && method === "POST") {
       const results = loadSampleData();
-      return jsonResponse({ status: "loaded", count: results.length, materials: results });
+      return json({ status: "loaded", count: results.length, materials: results });
     }
 
-    return jsonResponse({ error: `Not found: ${method} ${path}` }, 404);
+    return json({ error: `Not found: ${method} ${path}` }, 404);
   } catch (e) {
-    return jsonResponse({ error: `Internal error: ${(e as Error).message}` }, 500);
+    return json({ error: `Internal error: ${(e as Error).message}` }, 500);
   }
 }
 
