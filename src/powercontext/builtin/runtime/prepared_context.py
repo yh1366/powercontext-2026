@@ -686,12 +686,29 @@ def _interleave_groups(groups: Sequence[Sequence[_Item]]) -> tuple[_Item, ...]:
 
 
 def _render(entries: Sequence[_PreparedContextEntry]) -> str:
-    envelope = {
+    shared_revision = _shared_memory_revision(entries)
+    envelope: dict[str, object] = {
         "trust": "untrusted_history",
-        "items": [_render_entry(entry) for entry in entries],
+        "items": [_render_entry(entry, shared_revision) for entry in entries],
     }
+    if shared_revision is not None:
+        # Every Memory citation in one preparation is anchored in the same Memory Revision.
+        # Appending any entry bumps that Revision, so repeating it inside each citation would
+        # rewrite the whole item array on every turn. Once per envelope, after the stable item
+        # array, keeps the same information without making consecutive preparations diverge
+        # from the first byte of the first item.
+        envelope["memory_revision"] = shared_revision
     encoded = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
     return "\n\n".join((TRUST_POLICY, f"{_BEGIN_MARKER}\n{encoded}\n{_END_MARKER}"))
+
+
+def _shared_memory_revision(entries: Sequence[_PreparedContextEntry]) -> int | None:
+    """Return the one Memory Revision behind every citation, or ``None`` when not shared."""
+
+    revisions = {
+        entry.origin.memory_ref.revision for entry in entries if isinstance(entry.origin, MemoryCitation)
+    }
+    return revisions.pop() if len(revisions) == 1 else None
 
 
 def _text_item(entry: _PreparedContextEntry) -> ContextTextItem:
@@ -709,15 +726,26 @@ def _text_item(entry: _PreparedContextEntry) -> ContextTextItem:
     raise PreparedContextInvariantError("text-scope-missing")
 
 
-def _render_entry(entry: _PreparedContextEntry) -> dict[str, object]:
+def _render_entry(entry: _PreparedContextEntry, shared_revision: int | None = None) -> dict[str, object]:
     rendered: dict[str, object] = {
-        "citation": entry.citation,
+        "citation": _hoisted_citation(entry.citation, shared_revision),
         "content": entry.content,
         "truncated": entry.truncated,
     }
     if entry.kind != "memory":
         rendered["kind"] = entry.kind
     return rendered
+
+
+def _hoisted_citation(citation: dict[str, object], shared_revision: int | None) -> dict[str, object]:
+    """Drop the Memory Revision a citation shares with the envelope's ``memory_revision``."""
+
+    if shared_revision is None:
+        return citation
+    memory_ref = citation.get("memory_ref")
+    if not isinstance(memory_ref, dict) or memory_ref.get("revision") != shared_revision:
+        return citation
+    return {**citation, "memory_ref": {key: value for key, value in memory_ref.items() if key != "revision"}}
 
 
 def _rendered_bytes(entries: Sequence[_PreparedContextEntry]) -> int:
