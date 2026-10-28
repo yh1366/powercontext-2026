@@ -1,0 +1,329 @@
+app:
+  description: >-
+    记忆酒馆 — 一个会记住你的 NPC 酒馆掌柜。每次对话的关键信息都会通过
+    PowerContext 持久化存储，下次聊天时 NPC 会回忆起你说过的话、做过的事。
+    玩家输入名字后与酒馆掌柜"老胡"自由对话，体验跨会话记忆带来的沉浸式互动。
+  icon: "\U0001F37A"
+  icon_background: "#FFE4E1"
+  mode: advanced-chat
+  name: "\u8BB0\u5FC6\u9152\u9986 - Memory Tavern"
+  use_icon_as_answer_icon: false
+kind: app
+version: 0.1.5
+workflow:
+  conversation_variables: []
+  environment_variables:
+    - name: BACKEND_URL
+      value_type: string
+      value: "http://host.docker.internal:8600"
+      description: "Memory Tavern 后端服务地址（Dify 容器内访问宿主机用 host.docker.internal）"
+  features:
+    opening_statement: "\U0001F37A 欢迎来到记忆酒馆！我是老胡，这间酒馆的掌柜。我这辈子什么都记不住，唯独记得每个客人的脸和他们干过的事。告诉我你的名字吧，咱们聊聊！"
+    suggested_questions:
+      - "我叫小明，给我来杯麦酒！"
+      - "老胡，你这里有什么有趣的故事吗？"
+      - "你还记得上次来的那个骑士吗？"
+    suggested_questions_after_answer:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ""
+      voice: ""
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+      type: ""
+      config: {}
+    file_upload:
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+          - remote_url
+          - local_file
+      allowed_file_types: []
+      allowed_file_extensions: []
+      allowed_file_upload_methods:
+        - remote_url
+        - local_file
+      number_limits: 3
+      fileUploadConfig:
+        file_size_limit: 15
+        batch_count_limit: 5
+        image_file_size_limit: 10
+        video_file_size_limit: 100
+        audio_file_size_limit: 50
+        workflow_file_upload_limit: 10
+  graph:
+    edges:
+      - id: "e-start-recall"
+        source: "node-start"
+        target: "http-recall"
+        sourceHandle: "source"
+        targetHandle: "target"
+        type: "custom"
+        data:
+          isInIteration: false
+          sourceType: "start"
+          targetType: "http-request"
+      - id: "e-recall-format"
+        source: "http-recall"
+        target: "code-format-memory"
+        sourceHandle: "source"
+        targetHandle: "target"
+        type: "custom"
+        data:
+          isInIteration: false
+          sourceType: "http-request"
+          targetType: "code"
+      - id: "e-format-llm"
+        source: "code-format-memory"
+        target: "llm-npc-response"
+        sourceHandle: "source"
+        targetHandle: "target"
+        type: "custom"
+        data:
+          isInIteration: false
+          sourceType: "code"
+          targetType: "llm"
+      - id: "e-llm-save"
+        source: "llm-npc-response"
+        target: "http-remember"
+        sourceHandle: "source"
+        targetHandle: "target"
+        type: "custom"
+        data:
+          isInIteration: false
+          sourceType: "llm"
+          targetType: "http-request"
+      - id: "e-save-answer"
+        source: "http-remember"
+        target: "node-answer"
+        sourceHandle: "source"
+        targetHandle: "target"
+        type: "custom"
+        data:
+          isInIteration: false
+          sourceType: "http-request"
+          targetType: "answer"
+    nodes:
+      - id: "node-start"
+        type: "custom"
+        position:
+          x: 80
+          y: 282
+        width: 244
+        height: 118
+        data:
+          type: "start"
+          title: "\u5F00\u59CB"
+          desc: "\u73A9\u5BB6\u8F93\u5165\u540D\u5B57\u540E\u5F00\u59CB\u5BF9\u8BDD"
+          variables:
+            - variable: "player_name"
+              label: "\u4F60\u7684\u540D\u5B57"
+              type: "text-input"
+              required: true
+              max_length: 64
+              options: []
+
+      - id: "http-recall"
+        type: "custom"
+        position:
+          x: 380
+          y: 282
+        width: 244
+        height: 178
+        data:
+          type: "http-request"
+          title: "\u53EC\u56DE\u8BB0\u5FC6"
+          desc: "\u4ECE PowerContext \u68C0\u7D22\u73A9\u5BB6\u7684\u5386\u53F2\u8BB0\u5FC6"
+          method: "post"
+          url: "{{#env.BACKEND_URL#}}/api/recall"
+          authorization:
+            type: "no-auth"
+            config: null
+          headers: ""
+          params: ""
+          body:
+            type: "json"
+            data: >-
+              {
+                "player_name": "{{#node-start.player_name#}}",
+                "query": "{{#sys.query#}}",
+                "limit": 8
+              }
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+          ssl_verify: true
+          retry:
+            max_retries: 0
+            retry_interval: 100
+
+      - id: "code-format-memory"
+        type: "custom"
+        position:
+          x: 680
+          y: 282
+        width: 244
+        height: 178
+        data:
+          type: "code"
+          title: "\u683C\u5F0F\u5316\u8BB0\u5FC6"
+          desc: "\u5C06\u68C0\u7D22\u7ED3\u679C\u8F6C\u6362\u4E3A LLM \u53EF\u7528\u7684\u4E0A\u4E0B\u6587\u5B57\u7B26\u4E32"
+          code_language: "python3"
+          variables:
+            - variable: "recall_response"
+              value_selector:
+                - "http-recall"
+                - "body"
+          code: |
+            import json
+
+            def main(recall_response: str) -> dict:
+                try:
+                    data = json.loads(recall_response)
+                    memory_context = data.get("memory_context", "")
+                    hit_count = data.get("hit_count", 0)
+                except (json.JSONDecodeError, TypeError):
+                    memory_context = ""
+                    hit_count = 0
+
+                if hit_count == 0:
+                    context = "（这是你第一次见到这位客人，你没有任何关于他/她的记忆。）"
+                else:
+                    context = f"（你回忆起关于这位客人的 {hit_count} 条记忆：\n{memory_context}）"
+
+                return {
+                    "memory_context": context,
+                    "hit_count": hit_count
+                }
+          outputs:
+            memory_context:
+              type: "string"
+              children: null
+            hit_count:
+              type: "number"
+              children: null
+
+      - id: "llm-npc-response"
+        type: "custom"
+        position:
+          x: 980
+          y: 282
+        width: 244
+        height: 178
+        data:
+          type: "llm"
+          title: "\u8001\u80E1\u56DE\u590D"
+          desc: "\u6839\u636E\u8BB0\u5FC6\u548C\u73A9\u5BB6\u8F93\u5165\u751F\u6210 NPC \u56DE\u590D"
+          model:
+            provider: "openai"
+            name: "gpt-4o-mini"
+            mode: "chat"
+            completion_params:
+              temperature: 0.85
+              top_p: 0.95
+              max_tokens: 1024
+              frequency_penalty: 0.3
+              presence_penalty: 0.2
+          prompt_template:
+            - id: "system-prompt"
+              role: "system"
+              text: >-
+                你是"老胡"，记忆酒馆的掌柜。你性格鲜明，说话直爽，有点粗犷但内心善良。
+
+
+                ## 你的核心特征
+
+                - 你有一个"恩怨本"，会记住每个客人说过的话、做过的事
+                - 你对诚实的客人很慷慨，对撒谎的客人会冷嘲热讽
+                - 你特别喜欢听故事，好故事可以换一杯免费麦酒
+                - 你偶尔会提起酒馆里的传说和八卦
+                - 你说话带点江湖气，常用"嘿"、"嚯"、"得嘞"等语气词
+
+
+                ## 记忆使用规则
+
+                以下是你对这位客人的记忆。请在对话中自然地引用这些记忆，就像你真的认识这个人一样。
+                不要生硬地列举记忆，而是让它们融入你的回应中。
+
+                {{#code-format-memory.memory_context#}}
+
+
+                ## 当前对话
+
+                客人（{{#node-start.player_name#}}）说：{{#sys.query#}}
+
+
+                ## 回复要求
+
+                1. 以老胡的身份和口吻回复，保持角色一致性
+                2. 如果有相关记忆，自然地提及过去的互动
+                3. 回复控制在 2-4 句话，简洁有力
+                4. 不要打破角色，不要提到"记忆系统"或"PowerContext"等技术概念
+                5. 适当加入动作描写（用括号表示），如（擦杯子）（眯起眼睛打量你）
+          context:
+            enabled: false
+            variable_selector: []
+          vision:
+            enabled: false
+            configs:
+              detail: "high"
+          memory: null
+
+      - id: "http-remember"
+        type: "custom"
+        position:
+          x: 1280
+          y: 282
+        width: 244
+        height: 178
+        data:
+          type: "http-request"
+          title: "\u4FDD\u5B58\u8BB0\u5FC6"
+          desc: "\u5C06\u672C\u6B21\u5BF9\u8BDD\u7684\u5173\u952E\u4FE1\u606F\u5B58\u5165 PowerContext"
+          method: "post"
+          url: "{{#env.BACKEND_URL#}}/api/remember"
+          authorization:
+            type: "no-auth"
+            config: null
+          headers: ""
+          params: ""
+          body:
+            type: "json"
+            data: >-
+              {
+                "player_name": "{{#node-start.player_name#}}",
+                "kind": "interaction",
+                "text": "客人{{#node-start.player_name#}}说：{{#sys.query#}}。老胡回应：{{#llm-npc-response.text#}}",
+                "reason": "Tavern conversation turn"
+              }
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+          ssl_verify: true
+          retry:
+            max_retries: 0
+            retry_interval: 100
+
+      - id: "node-answer"
+        type: "custom"
+        position:
+          x: 1580
+          y: 282
+        width: 244
+        height: 107
+        data:
+          type: "answer"
+          title: "\u8F93\u51FA\u56DE\u590D"
+          desc: "\u5C06\u8001\u80E1\u7684\u56DE\u590D\u8FD4\u56DE\u7ED9\u73A9\u5BB6"
+          answer: "{{#llm-npc-response.text#}}"
+          variables: []
+
+  hash: ""
