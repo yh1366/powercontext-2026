@@ -69,8 +69,18 @@ workflow:
           isInIteration: false
           sourceType: "start"
           targetType: "http-request"
-      - id: "e-recall-format"
+      - id: "e-recall-world"
         source: "http-recall"
+        target: "http-world"
+        sourceHandle: "source"
+        targetHandle: "target"
+        type: "custom"
+        data:
+          isInIteration: false
+          sourceType: "http-request"
+          targetType: "http-request"
+      - id: "e-world-format"
+        source: "http-world"
         target: "code-format-memory"
         sourceHandle: "source"
         targetHandle: "target"
@@ -164,6 +174,41 @@ workflow:
             max_retries: 0
             retry_interval: 100
 
+      - id: "http-world"
+        type: "custom"
+        position:
+          x: 380
+          y: 520
+        width: 244
+        height: 178
+        data:
+          type: "http-request"
+          title: "\u53EC\u56DE\u4E16\u754C\u8BB0\u5FC6"
+          desc: "\u4ECE PowerContext \u68C0\u7D22\u5171\u4EAB\u9152\u9986\u4E16\u754C\u8BBE\u5B9A\uFF08lore/\u6027\u683C/\u89C4\u5219/\u4F20\u95FB\uFF09"
+          method: "post"
+          url: "{{#env.BACKEND_URL#}}/api/recall-world"
+          authorization:
+            type: "no-auth"
+            config: null
+          headers: ""
+          params: ""
+          body:
+            type: "json"
+            data: >-
+              {
+                "player_name": "{{#node-start.player_name#}}",
+                "query": "{{#sys.query#}}",
+                "limit": 5
+              }
+          timeout:
+            max_connect_timeout: 0
+            max_read_timeout: 0
+            max_write_timeout: 0
+          ssl_verify: true
+          retry:
+            max_retries: 0
+            retry_interval: 100
+
       - id: "code-format-memory"
         type: "custom"
         position:
@@ -181,10 +226,14 @@ workflow:
               value_selector:
                 - "http-recall"
                 - "body"
+            - variable: "world_response"
+              value_selector:
+                - "http-world"
+                - "body"
           code: |
             import json
 
-            def main(recall_response: str) -> dict:
+            def main(recall_response: str, world_response: str) -> dict:
                 try:
                     data = json.loads(recall_response)
                     memory_context = data.get("memory_context", "")
@@ -193,17 +242,34 @@ workflow:
                     memory_context = ""
                     hit_count = 0
 
+                try:
+                    world = json.loads(world_response)
+                    world_context = world.get("world_context", "")
+                    world_hit_count = world.get("world_hit_count", 0)
+                except (json.JSONDecodeError, TypeError):
+                    world_context = ""
+                    world_hit_count = 0
+
                 if hit_count == 0:
-                    context = "（这是你第一次见到这位客人，你没有任何关于他/她的记忆。）"
+                    player_ctx = "（这是你第一次见到这位客人，你没有任何关于他/她的记忆。）"
                 else:
-                    context = f"（你回忆起关于这位客人的 {hit_count} 条记忆：\n{memory_context}）"
+                    player_ctx = f"（你回忆起关于这位客人的 {hit_count} 条记忆：\n{memory_context}）"
+
+                if world_hit_count == 0:
+                    world_ctx = "（没有与当前话题相关的世界记忆。）"
+                else:
+                    world_ctx = f"（与当前话题相关的酒馆世界记忆：\n{world_context}）"
 
                 return {
-                    "memory_context": context,
+                    "memory_context": player_ctx,
+                    "world_context": world_ctx,
                     "hit_count": hit_count
                 }
           outputs:
             memory_context:
+              type: "string"
+              children: null
+            world_context:
               type: "string"
               children: null
             hit_count:
@@ -247,7 +313,15 @@ workflow:
                 - 你说话带点江湖气，常用"嘿"、"嚯"、"得嘞"等语气词
 
 
-                ## 记忆使用规则
+                ## 酒馆世界记忆（来自 PowerContext 世界 Scope）
+
+                以下是酒馆的世界设定、你的性格来历、规矩和传闻。自然地把它们融进对话：
+                客人问到相关话题时，就像讲自己亲身经历一样讲出来。没有相关内容时不要硬提。
+
+                {{#code-format-memory.world_context#}}
+
+
+                ## 你对这位客人的记忆（来自 PowerContext 玩家 Scope）
 
                 以下是你对这位客人的记忆。请在对话中自然地引用这些记忆，就像你真的认识这个人一样。
                 不要生硬地列举记忆，而是让它们融入你的回应中。

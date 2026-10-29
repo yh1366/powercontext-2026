@@ -1,0 +1,23 @@
+# Raw PowerContext HTTP API transcript (captured 2026-10-29T11:33:40+08:00)
+
+## POST /v1/scopes (idempotent resolve of world scope)
+
+Request: {"title":"Memory Tavern NPC World","summary":"...","idempotency_key":"tavern-npc-world"}
+Response:
+{"scope_id":"scp_0z98cs15wjmthgnv1zafnm6j3b","title":"Memory Tavern NPC World","summary":"Shared world knowledge for the Memory Tavern NPC: personality, lore, rules, rumors.","parent_scope_id":null,"context_references":[],"external_references":[],"version":1}
+
+## POST /v1/memory/search (world scope: well/rumor query)
+
+Request: {"scope_id":"<world scp id>","query":"酒馆 井水 传闻 未来","limit":3}
+Response:
+{"memory":{"family":"memory","artifact_id":"memory","revision":8},"mode":"fts","hits":[{"citation":{"memory_ref":{"family":"memory","artifact_id":"memory","revision":8},"entry_id":"mem_ent_abcafb90530e4839b7ef98c3c0fe44bc","entry_version_id":"mem_ver_01e478904a5d48c3bebbabf9ac99487c"},"text":"有人说酒馆的井水能看见未来。老胡否认，但井水照卖双倍价钱。","score":0.01639344262295082,"matched_by":["fts"]},{"citation":{"memory_ref":{"family":"memory","artifact_id":"memory","revision":8},"entry_id":"mem_ent_33e4ccbe0c2a498fbd494183863ad83e","entry_version_id":"mem_ver_4d22cf7b128641f284a628dd800d4320"},"text":"传闻楼上闹鬼。老胡说那只是风声，但他从不让人在楼上过夜。","score":0.016129032258064516,"matched_by":["fts"]},{"citation":{"memory_ref":{"family":"memory","artifact_id":"memory","revision":8},"entry_id":"mem_ent_5684f5d687824062852a4be1b9714f42","entry_version_id":"mem_ver_9d0a152be9aa446b9daeb7f1dfb18ac9"},"text":"记忆酒馆坐落在七个国度的十字路口，酒窖比它所在的山还古老。","score":0.015873015873015872,"matched_by":["fts"]}]}
+
+## POST /v1/memory/search (player scope, cross-session recall)
+
+Request: {"scope_id":"<player scp id>","query":"冰霜山脉 雪狼","limit":3}
+Simulated session A: POST /api/remember (via backend) wrote one interaction memory.
+
+New session B: raw POST /v1/memory/search on the player scope:
+Request: {"scope_id":"scp_5sm20fdc9wd6pv6wybyan8j51v","query":"冰霜山脉 雪狼","limit":3}
+Response:
+{"memory":{"family":"memory","artifact_id":"memory","revision":1},"mode":"fts","hits":[{"citation":{"memory_ref":{"family":"memory","artifact_id":"memory","revision":1},"entry_id":"mem_ent_7819dad1ae444ed18cf4b191a85d4445","entry_version_id":"mem_ver_78d71e1b89fa4d30977520a112dceed9"},"text":"客人证据玩家说：我刚从北方的冰霜山脉过来，差点被雪狼咬了！。老胡回应：嚯，冰霜山脉来的，命真硬。","score":0.01639344262295082,"matched_by":["fts"]}]}

@@ -1,0 +1,17 @@
+=== Memory Tavern DSL sanity check ===
+
+  [PASS] valid YAML app structure
+  [PASS] graph has nodes — 7 nodes, 6 edges
+  [PASS] all edges connect existing nodes — dangling=[]
+  [PASS] has start/llm/answer nodes
+  [PASS] has player/world/remember HTTP nodes — ['http-recall', 'http-world', 'http-remember']
+  [PASS] world node calls /api/recall-world — {{#env.BACKEND_URL#}}/api/recall-world
+  [PASS] workflow chain includes world recall
+  [PASS] format node consumes http-recall body
+  [PASS] format node consumes http-world body
+  [PASS] LLM prompt uses world_context
+  [PASS] LLM prompt uses player memory_context
+  [PASS] remember node writes via /api/remember
+  [PASS] remember body carries dialogue text
+
+=== RESULT: all checks PASSED — DSL is internally consistent and ready to import ===

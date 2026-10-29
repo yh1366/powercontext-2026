@@ -1,0 +1,22 @@
+=== Memory Tavern Backend Test ===
+
+[1] Health check...
+  OK: {'status': 'ok', 'powercontext_url': 'http://127.0.0.1:8000'}
+
+[2] Seed world memories...
+  OK: Seeded 8 world memories
+
+[3] Init player scope...
+  OK: Scope = scp_1447ca75e9y1ewmtqt0ghvqtjx
+
+[4] Recall (should be empty for new player)...
+  OK: hit_count = 0
+
+[5] Remember a fact...
+  OK: entry_id = mem_ent_369977911df04d3eb297f0efde05a193
+
+[6] Recall again (should find the memory)...
+  OK: Found 1 memories
+    - [fact] TestHero said they defeated a dragon in the northern mountains.
+
+=== Test complete. Errors: 0 ===

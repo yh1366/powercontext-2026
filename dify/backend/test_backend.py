@@ -11,9 +11,14 @@ from __future__ import annotations
 import json
 import sys
 from urllib.request import Request, urlopen
+import urllib.error
+import urllib.request
 from urllib.error import HTTPError
 
 BACKEND_URL = "http://127.0.0.1:8600"
+
+# Bypass HTTP(S)_PROXY env vars: loopback services must be reached directly.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def post(path: str, payload: dict) -> dict:
@@ -25,7 +30,7 @@ def post(path: str, payload: dict) -> dict:
         method="POST",
     )
     try:
-        with urlopen(req, timeout=10) as resp:
+        with _OPENER.open(req, timeout=10) as resp:
             return json.load(resp)
     except HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")
@@ -42,7 +47,7 @@ def main() -> int:
 
     print("[1] Health check...")
     try:
-        with urlopen(f"{BACKEND_URL}/health", timeout=5) as resp:
+        with _OPENER.open(f"{BACKEND_URL}/health", timeout=5) as resp:
             data = json.load(resp)
             print(f"  OK: {data}")
     except Exception as e:

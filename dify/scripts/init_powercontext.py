@@ -1,50 +1,70 @@
-"""Initialize PowerContext scopes and seed world data for Memory Tavern."""
+"""Initialize PowerContext scopes and seed world data for Memory Tavern.
+
+Scope model (per PowerContext HTTP API docs):
+- The Server owns Scope IDs (``scp_...``). Clients create a Scope with a
+  stable ``idempotency_key`` and keep the returned ``scope_id``.
+- Re-POSTing /v1/scopes with the same idempotency_key is idempotent and
+  returns the original Scope, so this script can be re-run safely.
+
+Usage:
+    POWERCONTEXT_URL=http://127.0.0.1:8000 python scripts/init_powercontext.py
+"""
 
 from __future__ import annotations
 
 import json
 import os
 import sys
-from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 BASE_URL = os.getenv("POWERCONTEXT_URL", "http://127.0.0.1:8000").rstrip("/")
+TOKEN = os.getenv("POWERCONTEXT_TOKEN", "")
+WORLD_SCOPE_KEY = "tavern-npc-world"
+
+SEEDS = [
+    ("lore", "记忆酒馆坐落在七个国度的十字路口，酒窖比它所在的山还古老。"),
+    ("lore", "掌柜老胡曾招待过一位扮成商人的龙，龙留下了一枚金鳞当小费，至今挂在吧台上方。"),
+    ("personality", "老胡粗鲁但公道：敬重诚实的人，鄙视说谎的人，对落魄冒险家和流浪诗人格外心软。"),
+    ("personality", "老胡从不忘任何一张脸，也从不忘记一笔账。他有一本传奇的恩怨本，记下每次冒犯、每份善意和每个没结的账单。"),
+    ("rule", "酒馆铁律：吧台前不许带武器。老胡亲自用柜台下的弩执行这条规矩。"),
+    ("rule", "常客打九折，第一次来的客人全价——除非能讲个好故事。"),
+    ("rumor", "有人说酒馆的井水能看见未来。老胡否认，但井水照卖双倍价钱。"),
+    ("rumor", "传闻楼上闹鬼。老胡说那只是风声，但他从不让人在楼上过夜。"),
+]
 
 
 def post(path: str, payload: dict) -> dict:
     data = json.dumps(payload).encode("utf-8")
-    req = Request(
-        f"{BASE_URL}{path}",
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    headers = {"Content-Type": "application/json"}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
+    req = Request(f"{BASE_URL}{path}", data=data, headers=headers, method="POST")
     try:
-        with urlopen(req, timeout=10) as resp:
+        with urlopen(req, timeout=15) as resp:
             return json.load(resp)
     except HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")
-        print(f"  [WARN] {path} -> HTTP {e.code}: {detail[:200]}")
+        print(f"  [WARN] {path} -> HTTP {e.code}: {detail[:300]}")
         return {}
 
 
-def ensure_scope(scope_id: str, title: str, summary: str) -> None:
-    result = post("/v1/scopes", {
-        "title": title,
-        "summary": summary,
-        "idempotency_key": scope_id,
-    })
-    sid = result.get("scope_id", scope_id)
-    print(f"  Scope ready: {sid}")
+def resolve_scope(logical_key: str, title: str, summary: str) -> str:
+    result = post("/v1/scopes", {"title": title, "summary": summary, "idempotency_key": logical_key})
+    scope_id = result.get("scope_id", "")
+    if not scope_id:
+        print(f"  ERROR: could not resolve scope for {logical_key}")
+        sys.exit(1)
+    print(f"  Scope {logical_key} -> {scope_id}")
+    return scope_id
 
 
-def remember(scope_id: str, kind: str, text: str, reason: str = "") -> None:
-    post("/v1/memory/remember", {
-        "scope_id": scope_id,
-        "kind": kind,
-        "text": text,
-        "reason": reason or "Seed data",
-    })
+def remember(scope_id: str, kind: str, text: str, reason: str = "") -> bool:
+    result = post(
+        "/v1/memory/remember",
+        {"scope_id": scope_id, "kind": kind, "text": text, "reason": reason or "Seed data"},
+    )
+    return bool(result)
 
 
 def main() -> None:
@@ -57,35 +77,29 @@ def main() -> None:
     except Exception as e:
         print(f"  ERROR: Cannot reach PowerContext at {BASE_URL}")
         print(f"  {e}")
-        print("  Make sure PowerContext server is running:")
-        print("    powercontext server run")
+        print("  Make sure the PowerContext server is running first.")
         sys.exit(1)
 
-    print("[2/3] Creating NPC world scope...")
-    ensure_scope(
-        "tavern-npc-world",
+    print("[2/3] Resolving NPC world scope (idempotency_key=%s)..." % WORLD_SCOPE_KEY)
+    world_scope_id = resolve_scope(
+        WORLD_SCOPE_KEY,
         "Memory Tavern NPC World",
-        "Shared world knowledge for the Memory Tavern NPC.",
+        "Shared world knowledge for the Memory Tavern NPC: personality, lore, rules, rumors.",
     )
     print()
 
     print("[3/3] Seeding world memories...")
-    seeds = [
-        ("lore", "The Memory Tavern sits at the crossroads of seven realms. Travelers say its cellar is older than the mountain it rests upon."),
-        ("lore", "Old Hu, the tavern keeper, once served a dragon disguised as a merchant. The dragon left a single golden scale as tip - it still hangs above the bar."),
-        ("personality", "Old Hu is gruff but fair. He respects honesty and despises liars. He has a soft spot for wandering poets and broke adventurers."),
-        ("personality", "Old Hu never forgets a face - or a debt. He keeps a legendary grudge book where he records every slight, every kindness, and every unpaid tab."),
-        ("rule", "The tavern has one iron rule: no weapons at the bar. Old Hu enforces it personally with a crossbow mounted under the counter."),
-        ("rule", "Regulars get a 10% discount. First-timers pay full price unless they can tell a good story."),
-        ("rumor", "Some say the tavern's well water grants visions of the future. Old Hu denies this but charges double for well water anyway."),
-        ("rumor", "A ghost is rumored to haunt the upstairs room. Old Hu claims it's just the wind, but he refuses to let anyone stay there overnight."),
-    ]
-    for kind, text in seeds:
-        remember("tavern-npc-world", kind, text, "World seed data")
-        print(f"  Seeded [{kind}]: {text[:60]}...")
+    seeded = 0
+    for kind, text in SEEDS:
+        if remember(world_scope_id, kind, text, "World seed data"):
+            seeded += 1
+            print(f"  Seeded [{kind}]: {text[:40]}...")
+        else:
+            print(f"  [WARN] failed to seed [{kind}]: {text[:40]}...")
+    print(f"  {seeded}/{len(SEEDS)} world memories written to scope {world_scope_id}")
 
     print("\n=== Done! Memory Tavern world is ready. ===")
-    print("You can now import the Dify DSL and start chatting with Old Hu.")
+    print("Next: import dify/memory_tavern.yml into Dify, start the backend, and chat.")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,35 @@
+=== Memory Tavern end-to-end verification ===
+PowerContext: http://127.0.0.1:8000
+Backend:      http://127.0.0.1:8600
+
+[0] Health checks
+  [PASS] PowerContext /health/live
+  [PASS] Backend /health — powercontext_url=http://127.0.0.1:8000
+
+[1] World memory (node: http-world -> /api/recall-world)
+  [PASS] world scope has seeded memories — hits=4
+      world_context:
+        [fact] 有人说酒馆的井水能看见未来。老胡否认，但井水照卖双倍价钱。
+        [fact] 传闻楼上闹鬼。老胡说那只是风声，但他从不让人在楼上过夜。
+        [fact] 记忆酒馆坐落在七个国度的十字路口，酒窖比它所在的山还古老。
+        [fact] 酒馆铁律：吧台前不许带武器。老胡亲自用柜台下的弩执行这条规矩。
+  [PASS] world scope_id is server-owned (scp_) — scp_0z98cs15wjmthgnv1zafnm6j3b
+
+[2] Session A — first visit (nodes: http-recall + http-remember)
+  [PASS] fresh player has no memories yet — hits=0
+  [PASS] remember turn 1 — entry_id=mem_ent_602d8c30bff847848574eda68326b68d
+  [PASS] remember turn 2 — entry_id=mem_ent_6e0aa5645f50429999fd1837b51b4f45
+
+[3] Session B — brand-new session, same player (node: http-recall)
+  [PASS] cross-session memory hit — hits=2
+  [PASS] memory contains the ice-mountain fact
+  [PASS] memory contains the wolf fact
+      memory_context returned to the LLM node:
+        [fact] 客人验收20261029113055说：我最喜欢喝蜂蜜酒，别拿麦酒糊弄我。老胡回应：得嘞，蜂蜜酒记下了。
+        [fact] 客人验收20261029113055说：我刚从北方的冰霜山脉过来，差点被雪狼咬了！。老胡回应：嚯，冰霜山脉来的，命真硬。
+  [PASS] memory contains the honey-mead preference
+
+[4] Restart safety — scope re-resolution is idempotent
+  [PASS] same scope_id after re-resolution — scp_1rgpm30bzvbwnbsf51474dm9ra
+
+=== RESULT: all checks PASSED — cross-session memory gameplay reproduced ===

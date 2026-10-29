@@ -1,0 +1,25 @@
+2026-10-29T11:14:51+0800 INFO uvicorn Started server process [19644]
+2026-10-29T11:14:51+0800 INFO uvicorn Waiting for application startup.
+2026-10-29T11:14:51+0800 INFO powercontext.server.factory PowerContext Server is starting
+2026-10-29T11:14:53+0800 INFO powercontext.builtin.runtime.composition Artifact processing configuration
+2026-10-29T11:14:53+0800 INFO powercontext.server.factory PowerContext Server is ready
+2026-10-29T11:14:53+0800 INFO uvicorn Application startup complete.
+2026-10-29T11:14:53+0800 INFO uvicorn Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-10-29T11:15:20+0800 INFO powercontext.server.access PowerContext transport request completed request_id=9fb37a28fe8522f6 trace_id=46ed17d70730233e830add782ddc2a61 span_id=9fb37a28fe8522f6
+2026-10-29T11:15:21+0800 INFO powercontext.server.access PowerContext transport request completed request_id=1337c3db07c4f3aa trace_id=d1892b93aa330fff68b2f4a8732c6dd4 span_id=1337c3db07c4f3aa
+2026-10-29T11:15:22+0800 INFO powercontext.server.access PowerContext transport request completed request_id=7c5c2c0d4ebbc0c5 trace_id=3396454a7d4be8e1c05f8aa66a3f95af span_id=7c5c2c0d4ebbc0c5
+2026-10-29T11:16:50+0800 INFO powercontext.server.access PowerContext transport request completed request_id=59e7b4e4d8676f6f trace_id=9c727d352fd00bd3e833b0a307724226 span_id=59e7b4e4d8676f6f
+2026-10-29T11:17:05+0800 INFO powercontext.server.access PowerContext transport request completed request_id=f69650d82ba77c61 trace_id=a96b48bde4b92fd73d1f95632475c899 span_id=f69650d82ba77c61
+2026-10-29T11:17:06+0800 INFO powercontext.server.access PowerContext transport request completed request_id=8645492b7c7a3bbf trace_id=e25d042a1b73478829b801c39c9c56b9 span_id=8645492b7c7a3bbf
+2026-10-29T11:21:38+0800 INFO powercontext.server.access PowerContext transport request completed request_id=c809edc23e176de9 trace_id=a2133a9466b741522298db9e8e767066 span_id=c809edc23e176de9
+2026-10-29T11:21:38+0800 INFO powercontext.server.access PowerContext transport request completed request_id=571e0625116952e3 trace_id=297e1bea0e706ac17a6687a14c8cec58 span_id=571e0625116952e3
+2026-10-29T11:21:38+0800 INFO powercontext.server.access PowerContext transport request completed request_id=f614dc6849e95a11 trace_id=4f37b70ca43a316e1bac44f823c7e8b1 span_id=f614dc6849e95a11
+2026-10-29T11:21:38+0800 INFO powercontext.server.access PowerContext transport request completed request_id=600156d1a87b3734 trace_id=e24002592525e7fe0c03fb1bc0006105 span_id=600156d1a87b3734
+2026-10-29T11:21:38+0800 INFO powercontext.server.access PowerContext transport request completed request_id=cf374843f37c9134 trace_id=caf2fe0834623c44dd14e2e902f87d23 span_id=cf374843f37c9134
+2026-10-29T11:21:38+0800 INFO powercontext.server.access PowerContext transport request completed request_id=ef02413fac06d1ac trace_id=2dcbb3eeb28a9fe2ea6f0dbb1e8e2280 span_id=ef02413fac06d1ac
+2026-10-29T11:21:38+0800 INFO powercontext.server.access PowerContext transport request completed request_id=c3cec5f914642465 trace_id=27524a02c82d269e1e7a1d63ba84c1b9 span_id=c3cec5f914642465
+2026-10-29T11:21:38+0800 INFO powercontext.server.access PowerContext transport request completed request_id=835ae832c8b6d833 trace_id=13d037b2b4aa0ff491af2d7c4f414915 span_id=835ae832c8b6d833
+2026-10-29T11:21:39+0800 INFO powercontext.server.access PowerContext transport request completed request_id=0341e98f94607ce7 trace_id=b763089f6ebac0bc5fa39743203b4f0e span_id=0341e98f94607ce7
+2026-10-29T11:21:50+0800 INFO powercontext.server.access PowerContext transport request completed request_id=4f4be17bb45c5265 trace_id=36a23033500f05593c07ea8bce157aa8 span_id=4f4be17bb45c5265
+2026-10-29T11:22:02+0800 INFO powercontext.server.access PowerContext transport request completed request_id=2d4e6b37ef28bda1 trace_id=1ff070f2808a43f4e3cec2d4c6d63908 span_id=2d4e6b37ef28bda1
+2026-10-29T11:22:02+0800 INFO powercontext.server.access PowerContext transport request completed request_id=91e3625e9f975f25 trace_id=133de94980a487a8d3ac8b1d13a2901d span_id=91e3625e9f975f25
