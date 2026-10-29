@@ -1,11 +1,11 @@
 $ /d/oceanbase/pc-venv/Scripts/python.exe -m pytest -q -p no:cacheprovider demo_project/tests/test_refund_shipping_allocation.py
 --- workdir: /d/oceanbase/wt-qoder-official/minimax
---- started: 2026-10-29T20:17:52+08:00
+--- started: 2026-10-29T21:17:39+08:00
 FFFFFF                                                                   [100%]
 ================================== FAILURES ===================================
 ____________ test_partial_refund_allocates_shipping_by_goods_share ____________
 
-service = <ordercore.refund.RefundService object at 0x0000016BF7F41FD0>
+service = <ordercore.refund.RefundService object at 0x0000022C97F91FD0>
 basic_order = Order(order_id='O-1001', lines=(OrderLine(sku='SKU-A', unit_price_cents=1500, quantity=1), OrderLine(sku='SKU-B', unit... region='normal', discount_cents=135, coupon_cents=200, shipping_cents=800, paid_cents=4965, refunded_cents=0, tags=())
 
     def test_partial_refund_allocates_shipping_by_goods_share(service: RefundService, basic_order) -> None:
@@ -19,7 +19,7 @@ E        +  where 0 = RefundQuote(skus=('SKU-B',), goods_refund_cents=1851, ship
 demo_project\tests\test_refund_shipping_allocation.py:26: AssertionError
 ____________________ test_full_refund_returns_all_shipping ____________________
 
-service = <ordercore.refund.RefundService object at 0x0000016BF7F7FC50>
+service = <ordercore.refund.RefundService object at 0x0000022C97FCFC50>
 basic_order = Order(order_id='O-1001', lines=(OrderLine(sku='SKU-A', unit_price_cents=1500, quantity=1), OrderLine(sku='SKU-B', unit... region='normal', discount_cents=135, coupon_cents=200, shipping_cents=800, paid_cents=4965, refunded_cents=0, tags=())
 
     def test_full_refund_returns_all_shipping(service: RefundService, basic_order) -> None:
@@ -33,7 +33,7 @@ E        +  and   800 = Order(order_id='O-1001', lines=(OrderLine(sku='SKU-A', u
 demo_project\tests\test_refund_shipping_allocation.py:33: AssertionError
 ________________ test_remote_region_shipping_is_allocated_too _________________
 
-service = <ordercore.refund.RefundService object at 0x0000016BF7F7FD90>
+service = <ordercore.refund.RefundService object at 0x0000022C97FCFD90>
 remote_order = Order(order_id='O-1001', lines=(OrderLine(sku='SKU-A', unit_price_cents=1500, quantity=1), OrderLine(sku='SKU-B', unit...region='remote', discount_cents=135, coupon_cents=200, shipping_cents=2000, paid_cents=6165, refunded_cents=0, tags=())
 
     def test_remote_region_shipping_is_allocated_too(service: RefundService, remote_order) -> None:
@@ -47,7 +47,7 @@ E        +  where 0 = RefundQuote(skus=('SKU-A',), goods_refund_cents=1388, ship
 demo_project\tests\test_refund_shipping_allocation.py:41: AssertionError
 _______________________ test_allocation_rounds_half_up ________________________
 
-service = <ordercore.refund.RefundService object at 0x0000016BF7F20B00>
+service = <ordercore.refund.RefundService object at 0x0000022C97F74B00>
 
     def test_allocation_rounds_half_up(service: RefundService) -> None:
         """SPEC-003#3.2 取整口径：分摊金额出现 0.5 分时必须 HALF_UP（903 × 500 / 1000 = 451.5 → 452）。"""
@@ -65,7 +65,7 @@ E        +  where 0 = RefundQuote(skus=('SKU-A',), goods_refund_cents=500, shipp
 demo_project\tests\test_refund_shipping_allocation.py:54: AssertionError
 _______________ test_cumulative_refund_is_capped_by_paid_amount _______________
 
-service = <ordercore.refund.RefundService object at 0x0000016BF7F222C0>
+service = <ordercore.refund.RefundService object at 0x0000022C97F762C0>
 
     def test_cumulative_refund_is_capped_by_paid_amount(service: RefundService) -> None:
         """SPEC-003#3.4 累计退款上限：同一订单已退 4500 后再退，可退余额 = 实付 4965 - 已退 4500 = 465，超出部分截断并给出告警。"""
@@ -78,7 +78,7 @@ E        +  where 4165 = RefundQuote(skus=('SKU-A', 'SKU-B', 'SKU-C'), goods_ref
 demo_project\tests\test_refund_shipping_allocation.py:62: AssertionError
 _________________ test_cumulative_refund_never_goes_negative __________________
 
-service = <ordercore.refund.RefundService object at 0x0000016BF8079C70>
+service = <ordercore.refund.RefundService object at 0x0000022C980C9C70>
 
     def test_cumulative_refund_never_goes_negative(service: RefundService) -> None:
         """SPEC-003#3.4 第 3 条：历史数据已超额退款时，本次可退金额为 0，不得返回负数，并给出告警。"""
@@ -96,5 +96,5 @@ FAILED demo_project/tests/test_refund_shipping_allocation.py::test_remote_region
 FAILED demo_project/tests/test_refund_shipping_allocation.py::test_allocation_rounds_half_up
 FAILED demo_project/tests/test_refund_shipping_allocation.py::test_cumulative_refund_is_capped_by_paid_amount
 FAILED demo_project/tests/test_refund_shipping_allocation.py::test_cumulative_refund_never_goes_negative
-6 failed in 0.37s
+6 failed in 0.22s
 --- exit_code: 1

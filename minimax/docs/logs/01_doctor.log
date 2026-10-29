@@ -1,12 +1,12 @@
 $ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx doctor
 --- workdir: /d/oceanbase/wt-qoder-official/minimax
---- started: 2026-10-29T20:17:19+08:00
+--- started: 2026-10-29T21:16:57+08:00
 sddctx 1.0.0  |  Python 3.13.14
 工作目录：D:\oceanbase\wt-qoder-official\minimax
 数据目录：D:\oceanbase\wt-qoder-official\minimax\runs
 数据库：seekdb / seekdb/MySQL 5.7.25-OceanBase seekdb-v1.4.0.0 / 库 sddctx
-  表行数：pc_documents=16, pc_chunks=77, pc_postings=3761, pc_df=1387, pc_runs=0, pc_state=1
+  表行数：pc_documents=16, pc_chunks=76, pc_postings=3698, pc_df=1382, pc_runs=3, pc_state=3
 状态后端：powercontext / scp_588xvxtd5x499bcd231s2b2793
-MiniMax：model=MiniMax-M2  key=未配置
+MiniMax：model=MiniMax-M2.7  key=已配置
 依赖：pymysql=installed  pytest=9.2.0
 --- exit_code: 0

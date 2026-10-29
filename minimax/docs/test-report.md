@@ -17,8 +17,18 @@
 
 ```
 $ pytest -q demo_project/tests/test_refund_shipping_allocation.py
-......                                                                   [100%]  ← 全在 refund 相关，见下
-6 failed in 0.37s                                                        exit=1
+...
+>       assert quote.total_refund_cents == 0
+E       AssertionError: assert 1388 == 0
+E        +  where 1388 = RefundQuote(skus=('SKU-A',), goods_refund_cents=1388,
+E                              shipping_refund_cents=0, total_refund_cents=1388, warnings=()).total_refund_cents
+FAILED ...::test_partial_refund_allocates_shipping_by_goods_share
+FAILED ...::test_full_refund_returns_all_shipping
+FAILED ...::test_remote_region_shipping_is_allocated_too
+FAILED ...::test_allocation_rounds_half_up
+FAILED ...::test_cumulative_refund_is_capped_by_paid_amount
+FAILED ...::test_cumulative_refund_never_goes_negative
+6 failed in 0.22s                                                        exit=1
 ```
 
 | 用例 | 失败原因（断言） | 说明 |
@@ -37,7 +47,7 @@ $ pytest -q demo_project/tests/test_refund_shipping_allocation.py
 
 ```
 $ pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py
-16 passed in 0.38s                                                       exit=0
+16 passed in 0.08s                                                       exit=0
 ```
 
 `python -m sddctx verify --task TASK-0007 --phase before` 的结论（写入 PowerContext）：
@@ -52,7 +62,7 @@ $ pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.
 
 ```
 $ pytest -q demo_project/tests
-22 passed in 0.12s                                                       exit=0
+22 passed in 0.18s                                                       exit=0
 ```
 
 - 目标测试 6 个：全部由失败转通过；
@@ -87,7 +97,11 @@ $ pytest -q demo_project/tests
 | --- | --- | --- |
 | 修改前 / 修改后日志 | 见 `logs/06_verify_before.log`、`logs/12_verify_after.log` 的 `代码版本` 字段 | 两次验证的 commit 相同：代码差异通过 `patches/` + `snapshots/` 管理，不是两个 commit |
 
-说明：本题的「修改前后」是同一份提交内的两套快照（`snapshots/before`、`snapshots/after`），
+说明：日志里的 `代码版本` 是命令运行当时的 `HEAD`（即本次提交的父提交），而工作区内容已经等于
+本提交的内容——所有验证都在提交前的工作区上跑，代码差异由 `patches/` + `snapshots/` 管理，
+不依赖 git 历史。
+
+本题的「修改前后」是同一份提交内的两套快照（`snapshots/before`、`snapshots/after`），
 由 `demo reset` / `demo apply` 切换。这样评审在一个 commit 上就能复现两种状态，
 也避免了「靠 git 历史找修改前版本」的不可复现风险。
 
@@ -96,8 +110,8 @@ $ pytest -q demo_project/tests
 | 验收项 | 证据 |
 | --- | --- |
 | 能够运行 | `logs/01~04`：doctor / demo reset / init / ingest 全部 exit=0 |
-| MiniMax 实际参与 | `docs/minimax-dev-log.md` + `runs/<run_id>/minimax.request.json` / `minimax.response.json` |
+| MiniMax 实际参与 | `docs/minimax-dev-log.md`（上下文 → 提示词 → 响应 → diff 对照）+ `docs/minimax-run/<run_id>/minimax.request.json` / `minimax.response.json`（原始请求与响应，随仓库提交）+ `patches/TASK-0007.patch` |
 | 上下文正确 | `logs/09_check_v1.log`（必需来源齐全）、`logs/17_check_v2.log`（规格 v1.1 生效） |
-| 数据库实际参与 | `logs/04_ingest_v1.log`（3761 行倒排）、`docs/db-evidence.md`（检索 SQL 与行数） |
-| 状态能够复用 | `logs/19_state_show.log`（新进程读回 15 条事件折叠的任务视图） |
-| 代码修改有效 | `logs/05`（6 failed）→ `logs/11`（22 passed） |
+| 数据库实际参与 | `logs/04_ingest_v1.log`（3685 行倒排）、`docs/db-evidence.md`（检索 SQL 与行数） |
+| 状态能够复用 | `logs/19_state_show.log`（新进程读回 25 条事件折叠的任务视图）、`logs/21_state_after_sample.log`（`demo sample` 之后再次读回） |
+| 代码修改有效 | `logs/05`（6 failed）→ `logs/11`（22 passed）；`logs/20_demo_sample.log` 一条命令复跑同样结论 |

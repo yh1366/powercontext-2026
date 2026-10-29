@@ -203,43 +203,103 @@ def generate(
     apply: bool = False,
     temperature: float = 0.1,
     extra_instruction: str = "",
+    attempts: int = 2,
 ) -> dict[str, Any]:
     payload = pack.to_dict()
     run_dir = settings.data_dir / payload["run_id"]
     run_dir.mkdir(parents=True, exist_ok=True)
-    messages = [
-        {"role": "system", "content": system_prompt()},
-        {"role": "user", "content": user_prompt(payload["prompt"], extra_instruction)},
-    ]
-    (run_dir / "minimax.request.json").write_text(
-        json.dumps({"model": model or settings.minimax_model, "messages": messages}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    if dry_run:
-        return {"run_id": payload["run_id"], "dry_run": True, "request_path": str(run_dir / "minimax.request.json")}
 
-    try:
+    # 快照必须在打补丁之前取：早期版本把 snapshot 放在 apply 之后，
+    # 结果 before 快照里存的是已经改过的文件，回滚就失效了。
+    before_paths = sorted(
+        {item["path"] for category in ("code", "test") for item in payload["sources"][category]}
+    )
+    pre_hashes = {
+        rel: _sha256(settings.root / rel) for rel in before_paths if (settings.root / rel).is_file()
+    }
+    if apply:
+        snapshot(settings, sorted(pre_hashes), settings.snapshots_dir / "before")
+
+    report: dict[str, Any] = {
+        "run_id": payload["run_id"],
+        "task_id": task_id,
+        "attempts": [],
+    }
+    feedback = ""
+    patched: PatchReport | None = None
+    diff = ""
+    result = None
+
+    for attempt in range(1, max(1, attempts) + 1):
+        instruction = extra_instruction
+        if feedback:
+            instruction = (extra_instruction + "\n\n" + feedback).strip()
+        messages = [
+            {"role": "system", "content": system_prompt()},
+            {"role": "user", "content": user_prompt(payload["prompt"], instruction)},
+        ]
+        suffix = "" if attempt == 1 else f".attempt{attempt}"
+        (run_dir / f"minimax.request{suffix}.json").write_text(
+            json.dumps(
+                {"model": model or settings.minimax_model, "messages": messages},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        if dry_run:
+            return {"run_id": payload["run_id"], "dry_run": True, "request_path": str(run_dir / f"minimax.request{suffix}.json")}
+
         result = chat(settings, messages, model=model, temperature=temperature)
-    except MiniMaxError as exc:
-        raise MiniMaxError(str(exc)) from exc
+        (run_dir / f"minimax.response{suffix}.json").write_text(
+            json.dumps(
+                {
+                    "model": result.model,
+                    "endpoint": result.endpoint,
+                    "latency_ms": result.latency_ms,
+                    "usage": result.usage,
+                    "request_id": result.request_id,
+                    "content": result.content,
+                    "raw": result.raw,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
-    (run_dir / "minimax.response.json").write_text(
-        json.dumps(
-            {
-                "model": result.model,
-                "latency_ms": result.latency_ms,
-                "usage": result.usage,
-                "request_id": result.request_id,
-                "content": result.content,
-                "raw": result.raw,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+        attempt_info: dict[str, Any] = {
+            "attempt": attempt,
+            "request_id": result.request_id,
+            "latency_ms": result.latency_ms,
+            "usage": result.usage,
+            "instruction_extra": bool(instruction),
+            "applied": False,
+        }
+        try:
+            diff = extract_diff(result.content)
+            attempt_info["diff_sha256"] = sha256_text(diff)
+            if apply:
+                patched = apply_unified_diff(settings.demo_project, diff)
+                attempt_info["applied"] = True
+        except PatchError as exc:
+            attempt_info["error"] = str(exc)
+            report["attempts"].append(attempt_info)
+            if attempt < attempts:
+                # 把失败原因回灌给模型：这是真实开发里最常见的一轮修复，
+                # 也避免模型因为行号/上下文猜错而白跑一次。
+                _restore_snapshot(settings, sorted(pre_hashes))
+                feedback = (
+                    "上一次补丁无法应用：" + str(exc) + "。请重新输出完整 diff："
+                    "hunk 头行号必须与「目标文件完整内容」左侧行号一致，"
+                    "hunk 内不得省略任何未改动的中间行（每行以单个空格开头）。"
+                )
+                continue
+            raise
+        report["attempts"].append(attempt_info)
+        break
 
-    diff = extract_diff(result.content)
+    assert result is not None
     patch_path = settings.patches_dir / f"{task_id}.patch"
     patch_path.parent.mkdir(parents=True, exist_ok=True)
     header = (
@@ -250,27 +310,22 @@ def generate(
     )
     patch_path.write_text(header + diff, encoding="utf-8")
 
-    report: dict[str, Any] = {
-        "run_id": payload["run_id"],
-        "task_id": task_id,
-        "model": result.model,
-        "latency_ms": result.latency_ms,
-        "usage": result.usage,
-        "request_id": result.request_id,
-        "diff_sha256": sha256_text(diff),
-        "patch_path": str(patch_path),
-        "applied": False,
-    }
-
-    if apply:
-        before_paths = sorted({item["path"] for category in ("code", "test") for item in payload["sources"][category]})
-        pre_hashes = {
-            rel: _sha256(settings.root / rel) for rel in before_paths if (settings.root / rel).is_file()
+    report.update(
+        {
+            "model": result.model,
+            "endpoint": result.endpoint,
+            "latency_ms": result.latency_ms,
+            "usage": result.usage,
+            "request_id": result.request_id,
+            "diff_sha256": sha256_text(diff),
+            "patch_path": str(patch_path),
+            "applied": False,
         }
-        patched = apply_unified_diff(settings.demo_project, diff)
+    )
+
+    if apply and patched is not None:
         changed = [f"demo_project/{path}" for path in patched.files]
         post_hashes = {rel: _sha256(settings.root / rel) for rel in changed}
-        snapshot(settings, sorted(pre_hashes), settings.snapshots_dir / "before")
         snapshot(settings, changed, settings.snapshots_dir / "after")
         write_manifest(settings, task_id, pre_hashes, post_hashes)
         report.update(
@@ -285,8 +340,26 @@ def generate(
         )
 
     (run_dir / "codegen.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    _archive(settings, run_dir, ("minimax.request.json", "minimax.response.json", "codegen.json"))
+    _archive(
+        settings,
+        run_dir,
+        tuple(
+            sorted(
+                path.name
+                for path in run_dir.iterdir()
+                if path.name.startswith("minimax.") or path.name == "codegen.json"
+            )
+        ),
+    )
     return report
+
+
+def _restore_snapshot(settings: Settings, relative_paths: list[str]) -> None:
+    """把工作区文件恢复成 before 快照（重试前清理上一次的残留改动）。"""
+    for rel in relative_paths:
+        source = settings.snapshots_dir / "before" / rel
+        if source.is_file():
+            shutil.copy2(source, settings.root / rel)
 
 
 def _archive(settings: Settings, run_dir: Path, names: tuple[str, ...]) -> Path:

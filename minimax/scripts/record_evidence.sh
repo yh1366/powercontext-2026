@@ -67,5 +67,9 @@ run 18_ingest_v1_back "$PY" -m sddctx ingest
 echo "== 8. 状态复用：新进程读回 PowerContext 里的任务状态"
 run 19_state_show "$PY" -m sddctx state show --task TASK-0007
 
+echo "== 9. 一条命令复跑整条验证样例（评审最省事的入口）"
+run 20_demo_sample "$PY" -m sddctx demo sample
+run 21_state_after_sample "$PY" -m sddctx state show --task TASK-0007
+
 echo
 echo "日志已写入 $OUT/"

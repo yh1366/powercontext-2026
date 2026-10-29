@@ -9,9 +9,9 @@
         ▼
 ┌────────────────────── seekdb / OceanBase（库 sddctx）──────────────────────┐
 │ pc_documents 16 行   文档级元数据（类别、路径、规格版本、sha256）             │
-│ pc_chunks    77 行   块级正文（symbol / 行号区间 / 内容 / 块长）              │
-│ pc_postings 3761 行  倒排表（term → chunk_id, tf）                          │
-│ pc_df       1387 行  文档频率（term → df），BM25 的 idf 来源                 │
+│ pc_chunks    76 行   块级正文（symbol / 行号区间 / 内容 / 块长）              │
+│ pc_postings 3698 行  倒排表（term → chunk_id, tf）                          │
+│ pc_df       1382 行  文档频率（term → df），BM25 的 idf 来源                 │
 │ pc_runs / pc_state   上下文包历史 / 最近一次导入与验证摘要                    │
 └───────────────────────────────┬───────────────────────────────────────────┘
                                 │  SQL：df + postings + chunks + documents
@@ -20,7 +20,7 @@
                       + 规格条目号锚点（SPEC-003#3.2）+ 符号/路径加权
                                 │
                                 ▼
-        context.py ──► 上下文包 {spec[4], code[5], test[7], state, checks}
+        context.py ──► 上下文包 {spec[4], code[5], test[7], files, state, checks}
                                 │                    │
                     ┌───────────┘                    └────────────┐
                     ▼                                             ▼
@@ -42,6 +42,9 @@
    命中代码符号或文件名的块再乘 1.25 / 1.15。
 4. **每类配额**：规格 4 条、代码 5 条、测试 7 条。测试类配额刻意覆盖目标测试文件的
    全部 6 个用例 + 文件级说明，避免排序抖动导致漏掉验收用例。
+   另外把「必需代码来源所在文件」的**完整内容（带行号 + sha256）**一并放进上下文：
+   符号级片段足够回答「改哪里」，但写 unified diff 需要精确行号与逐字上下文行，
+   缺了它模型只能猜，补丁就打不上（`files` 字段，见 `minimax-dev-log.md` 的对照）。
 5. **可核对**：`checks` 字段把 `tasks/TASK-0007.json` 里声明的「必需来源」逐条比对，
    `python -m sddctx check` 非 0 退出即代表上下文不满足任务要求。
 
@@ -49,13 +52,13 @@
 
 | 技术 | 参与点 | 证据 |
 | --- | --- | --- |
-| seekdb / OceanBase | 16 个文档、77 个块、3761 条倒排全部落库；每次检索都是 4 条 SQL（df / postings / chunks / documents），命中行数写进上下文包的 `query.traces` | [`db-evidence.md`](db-evidence.md)、`docs/logs/04_ingest_v1.log` |
+| seekdb / OceanBase | 16 个文档、76 个块、3698 条倒排全部落库；每次检索都是 4 条 SQL（df / postings / chunks / documents），命中行数写进上下文包的 `query.traces` | [`db-evidence.md`](db-evidence.md)、`docs/logs/04_ingest_v1.log` |
 | PowerContext | 每次上下文构建、验证执行、补丁应用都写一条 `[sddctx] {json}` 记忆；新进程读回并折叠成「已完成 / 待办 / 验证结果」 | [`powercontext-evidence.md`](powercontext-evidence.md)、`docs/logs/19_state_show.log` |
-| MiniMax | 在上下文包（规格条款 + 待改函数 + 验收/回归测试清单）下生成 `refund.py` 的统一 diff，原始请求/响应/usage/耗时全部落盘 | [`minimax-dev-log.md`](minimax-dev-log.md)、`runs/<run_id>/minimax.*.json` |
+| MiniMax | 在上下文包（规格条款 + 待改函数 + 目标文件全文 + 验收/回归测试清单）下生成 `refund.py` 的统一 diff；补丁打不上时把错误回灌重试一轮；原始请求/响应/usage/耗时全部落盘 | [`minimax-dev-log.md`](minimax-dev-log.md)、`runs/<run_id>/minimax.*.json` |
 
 ## 4. 关键取舍（为什么这么写）
 
-* **不用向量库**：语料只有 77 个块，BM25 + 规格锚点已经能把 `SPEC-003#3.2/#3.4` 排到前二；
+* **不用向量库**：语料只有 76 个块，BM25 + 规格锚点已经能把 `SPEC-003#3.2/#3.4` 排到前二；
   引入 embedding 需要额外模型服务，反而让评审的复现成本上升。代价是对同义改写不敏感（已写入已知限制）。
 * **倒排表显式落库**，不用 `FULLTEXT`：seekdb 的全文索引能力随版本变化，自己建
   `pc_postings + pc_df` 能保证「检索确实查了数据库」，也能在任何 MySQL 兼容库上复跑。
@@ -72,6 +75,6 @@
 | --- | --- | --- |
 | 修改前 | `pytest -q demo_project/tests/test_refund_shipping_allocation.py` | 6 failed（运费分摊/累计上限未实现） |
 | 上下文 | `sddctx context --task TASK-0007` | 规格 3.2/3.4 + `quote_partial_refund` + 6 个验收用例 |
-| 改代码 | MiniMax 依上下文出 diff → `patches/TASK-0007.patch` | 只改 `ordercore/refund.py` |
+| 改代码 | MiniMax（`MiniMax-M2.7`，`/v1/chat/completions`）依上下文出 diff → `patches/TASK-0007.patch` | 只改 `ordercore/refund.py`，1 个 hunk，+11 / −4 行 |
 | 修改后 | `pytest -q` | 22 passed（目标 6 + 回归 16） |
 | 状态 | `sddctx state show` | 4 步已完成、2 条验证记录，来自 PowerContext |

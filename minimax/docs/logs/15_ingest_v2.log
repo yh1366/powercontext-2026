@@ -1,8 +1,9 @@
 $ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx ingest --variant v2
 --- workdir: /d/oceanbase/wt-qoder-official/minimax
---- started: 2026-10-29T20:19:21+08:00
-导入完成（seekdb）：16 个文档 / 6 个块 / 1436 个检索词
-规格版本：v2   耗时：2317 ms
+--- started: 2026-10-29T21:18:43+08:00
+导入完成（seekdb）：扫描 16 个文档（重建 1 / 跳过 15），本次生成 6 个块 / 522 条倒排
+库内现有：76 个块 / 3777 条倒排 / 1431 个检索词
+规格版本：v2   耗时：3259 ms
   code: 6 个文档
   spec: 4 个文档
   test: 6 个文档

@@ -8,7 +8,7 @@
 
 | 技术 | 在本作品里承担的作用 | 接入方式 |
 | --- | --- | --- |
-| MiniMax | 依据上下文包生成 `demo_project/ordercore/refund.py` 的代码修改 | HTTP `POST /v1/text/chatcompletion_v2`（`MiniMax-M2`），标准库 urllib |
+| MiniMax | 依据上下文包生成 `demo_project/ordercore/refund.py` 的代码修改 | HTTP `POST /v1/chat/completions`（`MiniMax-M2.7`），标准库 urllib，原始请求/响应落盘到 `docs/minimax-run/` |
 | seekdb / OceanBase | 存规格 / 代码 / 测试三类资料、倒排索引与检索统计量，检索结果直接组成上下文 | MySQL 协议（pymysql），库 `sddctx`，6 张 `pc_*` 表 |
 | PowerContext | 保存任务进展、上下文构建记录与验证结果，重启后读回继续使用 | HTTP `/v1/scopes`、`/v1/memory/remember`、`/v1/memory/entries/list`，Server 1.4.1 |
 
@@ -47,7 +47,8 @@ minimax/
 ├── snapshots/{before,after}/    ← 修改前后代码快照 + manifest.json（sha256）
 ├── patches/TASK-0007.patch      ← MiniMax 生成的代码差异
 ├── docs/                        ← 一页技术说明、验证样例、开发记录、数据库与状态记录、测试报告
-└── scripts/record_evidence.sh   ← 一键重跑并生成 docs/logs/ 下的全部日志
+│   └── minimax-run/<run_id>/    ← 每次 MiniMax 调用的原始请求 / 响应 / 补丁摘要（随仓库提交）
+├── scripts/record_evidence.sh   ← 一键重跑并生成 docs/logs/ 下的全部日志
 ```
 
 ---
@@ -61,7 +62,7 @@ minimax/
 | pytest | 8.0+（验证于 9.2.0） | 跑业务工程的目标测试与回归测试 |
 | seekdb | `oceanbase/seekdb:latest`（`seekdb-v1.4.0.0`，MySQL 协议端口 2881） | 可用 OceanBase MySQL 模式替代 |
 | PowerContext Server | 1.4.1 | `pip install "powercontext[server]==1.4.1"` |
-| MiniMax | `MiniMax-M2`（`/v1/text/chatcompletion_v2`） | 需要 Token Plan 的 API Key |
+| MiniMax | `MiniMax-M2.7`（`/v1/chat/completions`，OpenAI 兼容） | 需要 Token Plan 的 API Key；`python -m sddctx models` 可列出该 Key 下全部模型 |
 
 ```bash
 cd minimax
@@ -86,7 +87,7 @@ cp .env.example .env.local    # 然后把 MINIMAX_API_KEY 等占位值改掉
 | `SDDCTX_STATE` | `auto` | `auto` 探测 PowerContext，可用就用它，否则降级为本地事件文件 |
 | `POWERCONTEXT_API_URL` | `http://127.0.0.1:8848` | PowerContext Server 地址 |
 | `MINIMAX_API_KEY` | 空 | 只有 `codegen` 子命令需要，**验证样例不需要** |
-| `MINIMAX_BASE_URL` / `MINIMAX_MODEL` | `https://api.minimax.io` / `MiniMax-M2` | MiniMax 接口与模型 |
+| `MINIMAX_BASE_URL` / `MINIMAX_MODEL` | `https://api.minimaxi.com` / `MiniMax-M2.7` | MiniMax 接口与模型；模型名以 `python -m sddctx models` 的实际返回为准 |
 | `SDDCTX_HOME` | `minimax/runs` | 上下文包、测试日志、状态文件的落盘目录 |
 
 `python -m sddctx doctor` 会打印当前实际生效的数据库、状态后端、MiniMax Key 是否就绪。
@@ -105,7 +106,7 @@ pip install "powercontext[server]==1.4.1"
 powercontext server run --host 127.0.0.1 --port 8848 --role all --no-env-file
 # 首次启动会初始化 schema，约 30 秒；/health/live 返回 200 即可
 
-# 3) 建表 + 导入工程资料（16 个文档 → 77 个块 → 约 1400 个检索词）
+# 3) 建表 + 导入工程资料（16 个文档 → 76 个块 → 约 1378 个检索词）
 cd minimax
 python -m sddctx init
 python -m sddctx ingest --reset
@@ -133,6 +134,7 @@ python -m sddctx verify  --task TASK-0007 --phase before # 跑目标测试 + 回
 python -m sddctx state   show --task TASK-0007           # 读回任务状态（PowerContext）
 python -m sddctx demo    reset|apply|sample              # 复现「修改前失败 / 修改后通过」
 python -m sddctx codegen --task TASK-0007 [--apply]      # 调 MiniMax 生成补丁（需要 Key）
+python -m sddctx models                                  # 查当前 Key 可用的模型名
 ```
 
 ### 5.2 HTTP
@@ -155,8 +157,9 @@ curl -X POST http://127.0.0.1:8000/api/verify -d '{"task":"TASK-0007","phase":"a
 
 ### 5.3 输出字段（上下文包）
 
-`context --json` 的顶层字段：`task_id` / `spec_variant` / `storage` / `sources.{spec,code,test}` / `state` / `checks`。
-每条来源都带 `source_id`（可 grep 的定位符）、`path`、`lines`、`score`、`matched_terms`、`why`：
+`context --json` 的顶层字段：`task_id` / `spec_variant` / `storage` / `sources.{spec,code,test}` / `files` / `state` / `checks`。
+每条来源都带 `source_id`（可 grep 的定位符）、`path`、`lines`、`score`、`matched_terms`、`why`；
+`files` 是「必需代码来源所在文件的完整内容（带行号 + sha256）」，模型据它计算 hunk 行号：
 
 ```json
 {
@@ -208,7 +211,7 @@ bash scripts/record_evidence.sh
 ## 7. 已知限制
 
 1. **检索是词面检索**（BM25 + 规格条目号锚点 + 符号/路径加权），没有接 embedding 模型，
-   因此对「同义改写」不敏感；模块刻意把语料规模（16 文档 / 77 块）控制在毫秒级可枚举的范围，
+   因此对「同义改写」不敏感；模块刻意把语料规模（16 文档 / 76 块）控制在毫秒级可枚举的范围，
    用显式倒排表换取可审计、可复现。
 2. **中文分词的粒度是二元组**，没有引入 jieba，长专有名词可能被切碎；英文标识符做了
    snake/camel 拆分，所以 `quote_partial_refund` 这类符号命中良好。
@@ -222,6 +225,11 @@ bash scripts/record_evidence.sh
    用的是已提交的 `patches/TASK-0007.patch`。
 7. 上下文包的每类保留条数写死为规格 4 / 代码 5 / 测试 7 条（见 `context.DEFAULT_LIMITS`），
    没有做 token 预算动态裁剪。
+8. **`codegen` 会先做一次增量导入**（只重建改动过的文档），否则检索命中的是上一版代码，
+   模型可能照着旧实现写 diff。这一步在慢盘上约几十秒，属于已知开销。
+9. **补丁应用失败会自动重试一轮**：把「第几行附近找不到上下文」回灌给模型，要求它按完整文件
+   重新计算 hunk；两轮都失败才报错退出，两轮的 request/response 都留在 `runs/` 与
+   `docs/minimax-run/` 下。
 
 ---
 

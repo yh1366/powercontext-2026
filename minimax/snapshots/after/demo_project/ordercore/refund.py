@@ -63,32 +63,24 @@ class RefundService:
         coupon_back = money.share(order.coupon_cents, refund_goods, goods_total)
         goods_refund = refund_goods - discount_back - coupon_back
 
-        # SPEC-003#3.2：按商品金额占比分摊运费；整单退款直接退还全部运费。
-        shipping_refund = self._allocate_shipping(order, refund_goods, goods_total)
+        # SPEC-003#3.2：运费按退款商品金额占比分摊，全额退款时直接退还全部运费。
+        if refund_goods == goods_total:
+            shipping_refund = order.shipping_cents
+        else:
+            shipping_refund = money.share(order.shipping_cents, refund_goods, goods_total)
 
         total_refund = goods_refund + shipping_refund
-        warnings: list[str] = []
-
-        # SPEC-003#3.4：累计退款不得超过实付金额，超出部分截断并返回告警。
-        remaining = order.paid_cents - order.refunded_cents
-        if total_refund > remaining:
-            total_refund = max(remaining, 0)
-            warnings.append(
-                f"total refund truncated to remaining payable {total_refund} (SPEC-003#3.4)"
-            )
+        refundable_balance = order.paid_cents - order.refunded_cents
+        warnings: tuple[str, ...] = ()
+        if total_refund > refundable_balance:
+            total_refund = max(0, refundable_balance)
+            goods_refund = min(goods_refund, total_refund)
+            shipping_refund = min(shipping_refund, total_refund - goods_refund)
+            warnings = ("refund exceeds refundable balance; refund truncated (SPEC-003#3.4)",)
         return RefundQuote(
             skus=wanted,
             goods_refund_cents=goods_refund,
             shipping_refund_cents=shipping_refund,
             total_refund_cents=total_refund,
-            warnings=tuple(warnings),
+            warnings=warnings,
         )
-
-    @staticmethod
-    def _allocate_shipping(order: Order, refund_goods: int, goods_total: int) -> int:
-        """把订单运费按商品金额占比分摊到本次退款（SPEC-003#3.2）。"""
-        if order.shipping_cents <= 0 or refund_goods <= 0:
-            return 0
-        if refund_goods >= goods_total:
-            return order.shipping_cents
-        return money.share(order.shipping_cents, refund_goods, goods_total)

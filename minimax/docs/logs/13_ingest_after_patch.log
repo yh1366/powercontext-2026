@@ -1,8 +1,9 @@
 $ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx ingest
 --- workdir: /d/oceanbase/wt-qoder-official/minimax
---- started: 2026-10-29T20:18:58+08:00
-导入完成（seekdb）：16 个文档 / 8 个块 / 1387 个检索词
-规格版本：v1   耗时：1603 ms
+--- started: 2026-10-29T21:18:27+08:00
+导入完成（seekdb）：扫描 16 个文档（重建 1 / 跳过 15），本次生成 7 个块 / 334 条倒排
+库内现有：76 个块 / 3698 条倒排 / 1382 个检索词
+规格版本：v1   耗时：3025 ms
   code: 6 个文档
   spec: 4 个文档
   test: 6 个文档
@@ -22,5 +23,5 @@ $ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx ingest
   - demo_project/tests/test_refund_existing.py
   - demo_project/tests/test_refund_shipping_allocation.py
   - demo_project/tests/test_shipping.py
-SQL 抽样：INSERT INTO pc_postings ...（397 行）、INSERT INTO pc_df SELECT term, COUNT(*) FROM pc_postings GROUP BY term
+SQL 抽样：INSERT INTO pc_postings ...（334 行）、INSERT INTO pc_df SELECT term, COUNT(*) FROM pc_postings GROUP BY term
 --- exit_code: 0

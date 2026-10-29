@@ -98,7 +98,7 @@ def load_settings() -> Settings:
         powercontext_scope_id=os.getenv("POWERCONTEXT_SCOPE_ID", ""),
         powercontext_scope_key=os.getenv("POWERCONTEXT_SCOPE_KEY", "sddctx-ordercore-tasks"),
         minimax_api_key=os.getenv("MINIMAX_API_KEY", ""),
-        minimax_base_url=os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io"),
-        minimax_model=os.getenv("MINIMAX_MODEL", "MiniMax-M2"),
+        minimax_base_url=os.getenv("MINIMAX_BASE_URL", "https://api.minimaxi.com"),
+        minimax_model=os.getenv("MINIMAX_MODEL", "MiniMax-M2.7"),
         spec_variant=os.getenv("SDDCTX_SPEC_VARIANT", "v1"),
     )

@@ -27,9 +27,9 @@
 
 | 规格 | 条款 | 文件 / 行 | 关键内容 |
 | --- | --- | --- | --- |
-| `SPEC-003#3.2` | 运费分摊 | `specs/SPEC-003-refund.md` L21–L32 | `money.share(订单运费, 退款商品金额, 商品金额合计)`，整单退款退全部运费 |
-| `SPEC-003#3.4` | 累计退款上限 | `specs/SPEC-003-refund.md` L42–L50 | 可退余额 = 实付 − 已退；超额截断并告警；余额为负时退 0 |
-| `SPEC-003#3.3` | 折扣与优惠券回退 | 同上 L34–L40 | 与运费同一占比口径（不改，仅作上下文参照） |
+| `SPEC-003#3.2` | 运费分摊 | `specs/SPEC-003-refund.md` L14–L23 | `money.share(订单运费, 退款商品金额, 商品金额合计)`，整单退款退全部运费 |
+| `SPEC-003#3.4` | 累计退款上限 | `specs/SPEC-003-refund.md` L30–L38 | 可退余额 = 实付 − 已退；超额截断并告警；余额为负时退 0 |
+| `SPEC-003#3.3` | 折扣与优惠券回退 | 同上 L24–L29 | 与运费同一占比口径（不改，仅作上下文参照） |
 
 ## 4. 上下文中必须包含的来源（评审核对清单）
 
@@ -53,7 +53,7 @@
 | 业务工程 | `demo_project/`（`ordercore` 6 个模块 + 4 个测试文件，纯标准库） |
 | 修改前代码 | `snapshots/before/demo_project/ordercore/refund.py`（`shipping_refund = 0` + TODO） |
 | 修改后代码 | `snapshots/after/demo_project/ordercore/refund.py`；差异 `patches/TASK-0007.patch` |
-| 资料库 | seekdb 库 `sddctx`，`pc_documents` 16 行 / `pc_chunks` 77 行 / `pc_postings` 3761 行 |
+| 资料库 | seekdb 库 `sddctx`，`pc_documents` 16 行 / `pc_chunks` 76 行 / `pc_postings` 3698 行 |
 | 状态 | PowerContext scope `scp_588xvxtd5x499bcd231s2b2793`（`state reset` 后可复现空状态） |
 | 订单夹具 | `tests/conftest.py::build_order`：商品 4500 → 银卡折扣 135 → 券 200 → 运费 800 → 实付 4965 |
 
@@ -72,7 +72,7 @@ python -m sddctx init && python -m sddctx ingest --reset
 | 3 | `pytest -q demo_project/tests/test_refund_shipping_allocation.py` | **6 failed**，exit 1（断言失败，不是环境错误） | `05_pytest_before.log` |
 | 4 | `python -m sddctx verify --task TASK-0007 --phase before` | 目标测试失败 / 回归测试通过；退出码 1 | `06_verify_before.log` |
 | 5 | `pytest -q …/test_pricing.py …/test_shipping.py …/test_refund_existing.py` | **16 passed**，exit 0 | `07_pytest_regression.log` |
-| 6 | `python -m sddctx context --task TASK-0007` | 输出规格 4 条 / 代码 5 条 / 测试 7 条 + 任务状态 | `08_context_v1.log` |
+| 6 | `python -m sddctx context --task TASK-0007` | 输出规格 4 条 / 代码 5 条 / 测试 7 条 + 目标文件全文 + 任务状态 | `08_context_v1.log` |
 | 7 | `python -m sddctx check --task TASK-0007` | `必需来源齐全：是`，exit 0 | `09_check_v1.log` |
 | 8 | `python -m sddctx demo apply` | 应用修改后快照 | `10_demo_apply.log` |
 | 9 | `pytest -q demo_project/tests` | **22 passed**，exit 0 | `11_pytest_after.log` |
@@ -80,8 +80,9 @@ python -m sddctx init && python -m sddctx ingest --reset
 | 11 | `python -m sddctx ingest --variant v2` | 规格 v1.1 覆盖 v1.0：`规格版本：v2` | `15_ingest_v2.log` |
 | 12 | `python -m sddctx check --task TASK-0007 --variant v2` | 上下文引用 v1.1，命中新增条款「尾差归入…」 | `16~17_*.log` |
 | 13 | `python -m sddctx state show --task TASK-0007` | 读回 4 个已完成步骤 + 2 条验证记录（新进程） | `19_state_show.log` |
+| 14 | `python -m sddctx demo sample` | 一条命令跑完第 2–13 步，结论行三项均为 True | `20_demo_sample.log` |
 
-一步到位：`python -m sddctx demo sample`（会把上面第 2–13 步全部跑一遍并打印判定结论）。
+一步到位：`python -m sddctx demo sample`（会把上面第 2–13 步全部跑一遍并打印判定结论，日志 `20_demo_sample.log`）。
 
 ### 第 3 步失败长什么样（不是环境错误）
 
@@ -99,12 +100,14 @@ E     +  where 0 = RefundQuote(skus=('SKU-B',), goods_refund_cents=1851,
 
 ```
 ## 适用规格条目（4）
-### `SPEC-003#3.4`   specs/SPEC-003-refund.md 第 42–50 行   相关度 68.89
-### `SPEC-003#3.2`   specs/SPEC-003-refund.md 第 21–32 行   相关度 56.80
+### `SPEC-003#3.4`   specs/SPEC-003-refund.md 第 30–38 行   相关度 72.05
+### `SPEC-003#3.2`   specs/SPEC-003-refund.md 第 14–23 行   相关度 55.41
 ## 需要修改的代码（5）
-### `demo_project/ordercore/refund.py::RefundService.quote_partial_refund`  第 34–76 行
+### `demo_project/ordercore/refund.py::RefundService.quote_partial_refund`  第 49–79 行
 ## 验证用测试（7）
 ### `…::test_partial_refund_allocates_shipping_by_goods_share` / `…::test_full_refund_returns_all_shipping` / …
+## 目标文件完整内容
+### `demo_project/ordercore/refund.py`（79 行）  ← 带行号的整份文件，模型据此算 hunk 行号
 ## 任务状态（PowerContext）
 - 已完成：…（首次运行为空）  - 待办：4 步
 ```

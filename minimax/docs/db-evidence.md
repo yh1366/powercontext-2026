@@ -17,38 +17,43 @@ driver  : pymysql 1.2.3（纯 Python）
 | 表 | 行数 | 作用 |
 | --- | --- | --- |
 | `pc_documents` | 16 | 文档级元数据：类别、路径、标题、规格版本、内容 sha256 |
-| `pc_chunks` | 77 | 块级正文：symbol、行号区间、内容、块长（BM25 的 dl） |
-| `pc_postings` | 3761 | 倒排表：`(term, chunk_id, tf)` |
-| `pc_df` | 1387 | 文档频率：`(term, df)`，BM25 的 idf 来源 |
+| `pc_chunks` | 76 | 块级正文：symbol、行号区间、内容、块长（BM25 的 dl） |
+| `pc_postings` | 3698 | 倒排表：`(term, chunk_id, tf)` |
+| `pc_df` | 1382 | 文档频率：`(term, df)`，BM25 的 idf 来源 |
 | `pc_runs` | 2+ | 每次上下文包的完整 JSON（可回溯「当时用的是哪一版规格」） |
 | `pc_state` | 3+ | 最近一次导入报告、每次 verify 的摘要 |
 
-16 个文档 = 4 个规格 + 6 个代码模块 + 6 个测试文件；77 个块 =
-规格 6×4=24 + 代码符号块 + 测试用例块。全量导入日志见 [`logs/04_ingest_v1.log`](logs/04_ingest_v1.log)：
+16 个文档 = 4 个规格 + 6 个代码模块 + 6 个测试文件；76 个块 =
+规格 6×4=24 + 代码符号块 + 测试用例块（索引的是「修改前」的 `refund.py`）。
+全量导入日志见 [`logs/04_ingest_v1.log`](logs/04_ingest_v1.log)：
 
 ```
-导入完成（seekdb）：16 个文档 / 77 个块 / 1387 个检索词
-规格版本：v1   耗时：32496 ms
-SQL 抽样：INSERT INTO pc_postings ...（3761 行）、INSERT INTO pc_df SELECT term, COUNT(*) FROM pc_postings GROUP BY term
+导入完成（seekdb）：扫描 16 个文档（重建 16 / 跳过 0），本次生成 76 个块 / 3685 条倒排
+库内现有：76 个块 / 3685 条倒排 / 1378 个检索词
+规格版本：v1   耗时：67807 ms
+SQL 抽样：INSERT INTO pc_postings ...（3685 行）、INSERT INTO pc_df SELECT term, COUNT(*) FROM pc_postings GROUP BY term
 ```
 
 增量：`content_sha` 未变的文档整篇跳过，只重建变更文档的块与倒排；
-规格 v1 → v1.1 的切换只重建 6 个块，耗时约 5 秒（[`logs/15_ingest_v2.log`](logs/15_ingest_v2.log)）。
+规格 v1 → v1.1 的切换只重建 1 个文档 6 个块（3.3 秒），切回 v1 再重建 6 个块（5.3 秒）：
+[`logs/15_ingest_v2.log`](logs/15_ingest_v2.log)、[`logs/18_ingest_v1_back.log`](logs/18_ingest_v1_back.log)。
+打完补丁后重导 `refund.py` 同样只重建 1 个文档 7 个块，耗时 3.0 秒
+（[`logs/13_ingest_after_patch.log`](logs/13_ingest_after_patch.log)）。
 
 ## 3. 检索 SQL（每次组装上下文执行 4 条）
 
-以 `run-20261029T200547-TASK-0007`（规格 v1）为例，语料统计 `chunks=77, avgdl=82.79`：
+以 `run-20261029T211351-TASK-0007`（规格 v1）为例，语料统计 `chunks=76, avgdl=80.32`：
 
 ```sql
 -- ① 文档频率：BM25 的 idf
 SELECT term, df FROM pc_df WHERE term IN (?, ?, … 96 个检索词)
--- spec 类命中 69 行（69 个检索词在语料中出现）
+-- 96 个检索词里有 69 个在语料中出现（每类各查一次，行数相同）
 
 -- ② 候选块与词频：按类别过滤，一次取回 tf / 块长 / 符号 / 路径
 SELECT p.chunk_id, p.term, p.tf, c.token_len, c.symbol, c.path
 FROM pc_postings p JOIN pc_chunks c ON c.chunk_id = p.chunk_id
 WHERE p.term IN (?, ?, …) AND c.category = ?
--- spec 159 行 / code 204 行 / test 357 行
+-- spec 159 行 / code 170 行 / test 357 行
 
 -- ③ 取 Top-K 正文
 SELECT chunk_id, doc_id, category, path, symbol, heading, start_line, end_line, content
@@ -67,8 +72,8 @@ SELECT doc_id, spec_version FROM pc_documents WHERE doc_id IN (?, …)
 
 | 类别 | Top 结果（score） |
 | --- | --- |
-| spec | `SPEC-003#3.4` 68.89 → `SPEC-003#3.2` 56.80 → `SPEC-003#3.3` 39.16 → `SPEC-003#3.5` 23.47 |
-| code | `refund.py::RefundService.quote_partial_refund` 53.54 → `refund.py::<module>` 30.99 → `pricing.py::member_discount` 30.50 → `money.py::share` 27.19 |
+| spec | `SPEC-003#3.4` 72.05 → `SPEC-003#3.2` 55.41 → `SPEC-003#3.3` 37.60 → `SPEC-001#1.2` 22.21 |
+| code | `refund.py::RefundService.quote_partial_refund` 56.51 → `refund.py::<module>` 39.38 → `money.py::share` 30.42 → `pricing.py::member_discount` 29.79 |
 | test | 目标测试文件 6 个用例 + 文件级说明全部进入前 7，其它测试文件排在后面 |
 
 ## 4. 数据库真的参与了（三条可核对证据）

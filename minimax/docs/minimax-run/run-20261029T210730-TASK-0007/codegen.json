@@ -1,0 +1,54 @@
+{
+  "run_id": "run-20261029T210730-TASK-0007",
+  "task_id": "TASK-0007",
+  "attempts": [
+    {
+      "attempt": 1,
+      "request_id": "073278174b551dd17b3cfe3d52e6feca",
+      "latency_ms": 57505,
+      "usage": {
+        "total_tokens": 6946,
+        "total_characters": 0,
+        "prompt_tokens": 3862,
+        "completion_tokens": 3084,
+        "completion_tokens_details": {
+          "reasoning_tokens": 2636
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        }
+      },
+      "instruction_extra": false,
+      "applied": true,
+      "diff_sha256": "cc2cd064568b27f9a5113fd9c9eafd8ddc93681c91c7c6326b537d74253bc02f"
+    }
+  ],
+  "model": "MiniMax-M2.7",
+  "endpoint": "https://api.minimaxi.com/v1/chat/completions",
+  "latency_ms": 57505,
+  "usage": {
+    "total_tokens": 6946,
+    "total_characters": 0,
+    "prompt_tokens": 3862,
+    "completion_tokens": 3084,
+    "completion_tokens_details": {
+      "reasoning_tokens": 2636
+    },
+    "prompt_tokens_details": {
+      "cached_tokens": 128
+    }
+  },
+  "request_id": "073278174b551dd17b3cfe3d52e6feca",
+  "diff_sha256": "cc2cd064568b27f9a5113fd9c9eafd8ddc93681c91c7c6326b537d74253bc02f",
+  "patch_path": "D:\\oceanbase\\wt-qoder-official\\minimax\\patches\\TASK-0007.patch",
+  "applied": true,
+  "files": [
+    "ordercore/refund.py"
+  ],
+  "hunks": 1,
+  "added_lines": 11,
+  "removed_lines": 4,
+  "changed_hashes": {
+    "demo_project/ordercore/refund.py": "d8f918a91fa11287fff5cdcf8678a7074282089acafdf77bb242d0803572a609"
+  }
+}

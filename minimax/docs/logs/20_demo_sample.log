@@ -1,0 +1,47 @@
+$ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx demo sample
+--- workdir: /d/oceanbase/wt-qoder-official/minimax
+--- started: 2026-10-29T21:19:19+08:00
+==============================================================================
+验证样例 · TASK-0007 部分退款按商品金额占比分摊运费，并限制累计退款不超过实付金额
+==============================================================================
+
+[0] 清空状态，从空状态开始记录
+  state: 事件数 0
+
+[1] 恢复业务工程到修改前，运行测试（预期：目标用例失败、回归通过）
+  reset: demo_project/ordercore/__init__.py, demo_project/ordercore/money.py, demo_project/ordercore/pricing.py, demo_project/ordercore/refund.py, demo_project/tests/test_refund_shipping_allocation.py
+  目标测试: exit=1（预期非 0）
+  回归测试: exit=0（预期 0）
+
+[2] 导入工程资料到 seekdb / OceanBase 并建立索引
+  后端: seekdb / seekdb/MySQL 5.7.25-OceanBase seekdb-v1.4.0.0
+  资料: 16 个文档（本次重建 1 个 / 跳过 15 个）、索引块 76 个、检索词 1378 个
+
+[3] 按任务挑选规格 / 代码 / 测试，组装开发上下文
+  spec 来源: SPEC-003#3.4, SPEC-003#3.2, SPEC-003#3.3, SPEC-001#1.2
+  code 来源: demo_project/ordercore/refund.py::RefundService.quote_partial_refund, demo_project/ordercore/refund.py::<module>, demo_project/ordercore/money.py::share, demo_project/ordercore/pricing.py::member_discount, demo_project/ordercore/__init__.py::<module>
+  test 来源: demo_project/tests/test_refund_shipping_allocation.py::test_full_refund_returns_all_shipping, demo_project/tests/test_refund_shipping_allocation.py::<module>, demo_project/tests/test_refund_shipping_allocation.py::test_remote_region_shipping_is_allocated_too, demo_project/tests/test_refund_shipping_allocation.py::test_partial_refund_allocates_shipping_by_goods_share, demo_project/tests/test_refund_shipping_allocation.py::test_cumulative_refund_never_goes_negative, demo_project/tests/test_refund_shipping_allocation.py::test_allocation_rounds_half_up, demo_project/tests/test_refund_shipping_allocation.py::test_cumulative_refund_is_capped_by_paid_amount
+  验收自检: 通过
+
+[4] 应用 MiniMax 生成的代码修改（patches/TASK-0007.patch）
+  改动文件: demo_project/ordercore/refund.py
+
+[5] 再次运行目标测试与回归测试（预期：全部通过）
+  目标测试: exit=0
+  回归测试: exit=0
+
+[6] 规格变更演练：导入 SPEC-003 v1.1 后重新组装上下文
+  规格版本: v2
+  标记校验: [{"text": "运费退款 = `money.share(订单运费, 退款商品金额, 商品金额合计)`", "expected_source": "", "found": true, "actual_source": "SPEC-003#3.2"}, {"text": "尾差归入分摊后金额最大的商品行", "expected_source": "", "found": true, "actual_source": "SPEC-003#3.2"}]
+
+[7] 状态复用：从状态后端重新读取任务进展
+  状态后端: powercontext / scp_588xvxtd5x499bcd231s2b2793
+  已完成: 确认 SPEC-003#3.2 运费分摊口径与 SPEC-003#3.4 累计上限口径; 在 RefundService.quote_partial_refund 中实现运费按商品金额占比分摊; 实现累计退款上限：可退余额 = 实付 - 已退，超额截断并返回告警; 运行目标测试与回归测试，记录退出码与结论
+  待办: 无
+  验证记录: [{"phase": "before", "exit_code": 1, "passed": false, "command": "python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py", "summary": "目标测试 失败（exit=1），回归测试 通过（exit=0）", "at": "2026-10-29T21:19:36.155014+08:00"}, {"phase": "after", "exit_code": 0, "passed": true, "command": "python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py", "summary": "目标测试 通过（exit=0），回归测试 通过（exit=0）", "at": "2026-10-29T21:19:49.724904+08:00"}]
+
+==============================================================================
+结论：修改前目标测试失败 = True；修改后全部通过 = True；上下文自检 = True
+报告：D:\oceanbase\wt-qoder-official\minimax\runs\sample-report.json
+==============================================================================
+--- exit_code: 0

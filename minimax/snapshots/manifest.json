@@ -1,11 +1,15 @@
 {
   "task_id": "TASK-0007",
-  "generated_at": "2026-10-29T19:46:41+08:00",
+  "generated_at": "2026-10-29T21:08:34+08:00",
   "before": {
-    "demo_project/ordercore/refund.py": "b07617c32cf8d523596181cdb14617ef6fa18f99fe5d3a4ba89b115fd66eb728"
+    "demo_project/ordercore/__init__.py": "0f64aa43245d47cf13eaec466b5f3fd2f8d39a791ab89133af1a4a9110042d78",
+    "demo_project/ordercore/money.py": "34baf1bbf0e4fe1b079ff9af5195dad6451260a8cffb2e7173306130a871a64b",
+    "demo_project/ordercore/pricing.py": "228472770020aa6964203ca1a5d9b0a237677893bf0afbb636bb3e69c2bb9eff",
+    "demo_project/ordercore/refund.py": "b07617c32cf8d523596181cdb14617ef6fa18f99fe5d3a4ba89b115fd66eb728",
+    "demo_project/tests/test_refund_shipping_allocation.py": "067208d39e08a86a1e1f1605ff53b5fdf9c29d6eb6fff109862705bd17293f2f"
   },
   "after": {
-    "demo_project/ordercore/refund.py": "f297e2c7d481f1b598775368d647ba3259bcf33351da64eccc6121b340d2ec46"
+    "demo_project/ordercore/refund.py": "d8f918a91fa11287fff5cdcf8678a7074282089acafdf77bb242d0803572a609"
   },
   "note": "before = 任务开始时的代码（目标测试失败）；after = 应用 MiniMax 补丁后的代码。"
 }

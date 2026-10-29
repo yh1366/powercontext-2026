@@ -1,10 +1,10 @@
 $ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx context --task TASK-0007
 --- workdir: /d/oceanbase/wt-qoder-official/minimax
---- started: 2026-10-29T20:18:19+08:00
+--- started: 2026-10-29T21:17:58+08:00
 # 开发上下文 · TASK-0007 部分退款按商品金额占比分摊运费，并限制累计退款不超过实付金额
 
-- 生成时间：2026-10-29T20:18:30+08:00
-- 上下文编号：`run-20261029T201830-TASK-0007`
+- 生成时间：2026-10-29T21:18:01+08:00
+- 上下文编号：`run-20261029T211801-TASK-0007`
 - 规格版本：`v1`
 - 资料库：`seekdb`（seekdb/MySQL 5.7.25-OceanBase seekdb-v1.4.0.0，库 `sddctx`）
 
@@ -350,25 +350,148 @@ def test_cumulative_refund_is_capped_by_paid_amount(service: RefundService) -> N
     assert quote.warnings, "被上限截断时必须返回 warning"
 ```
 
+## 目标文件完整内容
+
+_行号即 unified diff 的 hunk 行号，请据此计算 hunk 头；上下文行必须逐字复制。_
+
+### `demo_project/ordercore/refund.py`（79 行）
+
+```
+   1 | """退款规则（SPEC-003）。
+   2 | 
+   3 | 本文件是 TASK-0007 的被改对象：现有实现只覆盖了「商品金额 + 折扣/优惠券回退」，
+   4 | 运费分摊（SPEC-003#3.2）与累计退款上限（SPEC-003#3.4）尚未实现。
+   5 | """
+   6 | 
+   7 | from __future__ import annotations
+   8 | 
+   9 | from dataclasses import dataclass
+  10 | from collections.abc import Sequence
+  11 | 
+  12 | from ordercore import money
+  13 | from ordercore.models import Order
+  14 | 
+  15 | 
+  16 | class RefundError(ValueError):
+  17 |     """退款入参不合法。"""
+  18 | 
+  19 | 
+  20 | class EmptyRefundError(RefundError):
+  21 |     """没有指定任何要退的 SKU。"""
+  22 | 
+  23 | 
+  24 | class UnknownSkuError(RefundError):
+  25 |     """指定的 SKU 不在订单中。"""
+  26 | 
+  27 | 
+  28 | @dataclass(frozen=True)
+  29 | class RefundQuote:
+  30 |     """退款试算结果，字段单位为「分」。
+  31 | 
+  32 |     ``warnings`` 用来把「规则降级/被截断」这类需要人工确认的情况显式带给调用方，
+  33 |     退款单落库时同样会写入审计字段（SPEC-004#4.2）。
+  34 |     """
+  35 | 
+  36 |     skus: tuple[str, ...]
+  37 |     goods_refund_cents: int
+  38 |     shipping_refund_cents: int
+  39 |     total_refund_cents: int
+  40 |     warnings: tuple[str, ...] = ()
+  41 | 
+  42 | 
+  43 | class RefundService:
+  44 |     """按订单快照计算退款金额。
+  45 | 
+  46 |     该类不做任何 I/O：退款单落库、审计日志由上层 application service 负责。
+  47 |     """
+  48 | 
+  49 |     def quote_partial_refund(self, order: Order, skus: Sequence[str]) -> RefundQuote:
+  50 |         wanted = tuple(dict.fromkeys(skus))
+  51 |         if not wanted:
+  52 |             raise EmptyRefundError("at least one sku is required")
+  53 |         lines = {line.sku: line for line in order.lines}
+  54 |         unknown = tuple(sku for sku in wanted if sku not in lines)
+  55 |         if unknown:
+  56 |             raise UnknownSkuError(f"sku not in order {order.order_id}: {', '.join(unknown)}")
+  57 | 
+  58 |         goods_total = order.goods_cents
+  59 |         refund_goods = sum(lines[sku].amount_cents for sku in wanted)
+  60 | 
+  61 |         # SPEC-003#3.3：会员折扣与优惠券按商品金额占比回退。
+  62 |         discount_back = money.share(order.discount_cents, refund_goods, goods_total)
+  63 |         coupon_back = money.share(order.coupon_cents, refund_goods, goods_total)
+  64 |         goods_refund = refund_goods - discount_back - coupon_back
+  65 | 
+  66 |         # TODO(TASK-0007): SPEC-003#3.2 运费分摊尚未实现，暂时不退还运费。
+  67 |         shipping_refund = 0
+  68 | 
+  69 |         total_refund = goods_refund + shipping_refund
+  70 |         warnings: tuple[str, ...] = ()
+  71 |         if refund_goods == goods_total:
+  72 |             warnings = ("shipping allocation missing for full refund (SPEC-003#3.2)",)
+  73 |         return RefundQuote(
+  74 |             skus=wanted,
+  75 |             goods_refund_cents=goods_refund,
+  76 |             shipping_refund_cents=shipping_refund,
+  77 |             total_refund_cents=total_refund,
+  78 |             warnings=warnings,
+  79 |         )
+```
+
+### `demo_project/ordercore/money.py`（31 行）
+
+```
+   1 | """金额计算工具：整个工程只允许通过这里做取整，避免各处舍入口径不一致。"""
+   2 | 
+   3 | from __future__ import annotations
+   4 | 
+   5 | from decimal import ROUND_HALF_UP, Decimal
+   6 | 
+   7 | _CENT = Decimal("1")
+   8 | 
+   9 | 
+  10 | def share(amount_cents: int, numerator: int, denominator: int) -> int:
+  11 |     """按 ``numerator / denominator`` 摊分 ``amount_cents``，四舍五入到分（HALF_UP）。
+  12 | 
+  13 |     这是 SPEC-003#3.2 与 SPEC-003#3.3 指定的唯一分摊口径：
+  14 |     先做精确的十进制乘法/除法，再一次性取整，禁止用浮点数相加后再取整。
+  15 |     """
+  16 |     if denominator <= 0:
+  17 |         raise ValueError("denominator must be positive")
+  18 |     if numerator < 0:
+  19 |         raise ValueError("numerator must not be negative")
+  20 |     if amount_cents == 0 or numerator == 0:
+  21 |         return 0
+  22 |     exact = Decimal(amount_cents) * Decimal(numerator) / Decimal(denominator)
+  23 |     return int(exact.quantize(_CENT, rounding=ROUND_HALF_UP))
+  24 | 
+  25 | 
+  26 | def apply_rate(amount_cents: int, rate: Decimal) -> int:
+  27 |     """按费率取整（会员折扣用），同样使用 HALF_UP。"""
+  28 |     if amount_cents == 0:
+  29 |         return 0
+  30 |     exact = Decimal(amount_cents) * rate
+  31 |     return int(exact.quantize(_CENT, rounding=ROUND_HALF_UP))
+```
+
 ## 任务状态（PowerContext）
 
 - 状态后端：`powercontext`（scope: `scp_588xvxtd5x499bcd231s2b2793`）
 - 已完成：确认 SPEC-003#3.2 运费分摊口径与 SPEC-003#3.4 累计上限口径；在 RefundService.quote_partial_refund 中实现运费按商品金额占比分摊；实现累计退款上限：可退余额 = 实付 - 已退，超额截断并返回告警；运行目标测试与回归测试，记录退出码与结论
 - 待办：无
 - 已有验证结果：
-  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:00:44.781687+08:00）
-  - after：exit=0，passed=True，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:00:52.727910+08:00）
-  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:05:43.578614+08:00）
-  - after：exit=0，passed=True，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:06:28.229829+08:00）
-  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:14:05.812168+08:00）
-  - after：exit=0，passed=True，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:14:49.707111+08:00）
-  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:18:08.285290+08:00）
+  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:22:25.525547+08:00）
+  - after：exit=0，passed=True，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:22:50.787353+08:00）
+  - after：exit=0，passed=True，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T21:09:11.701787+08:00）
+  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T21:13:36.861929+08:00）
+  - after：exit=0，passed=True，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T21:14:28.774026+08:00）
+  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T21:17:52.944141+08:00）
 
 ## 验收自检
 
 - 必需来源是否齐全：**是**
   - 标记「运费退款 = `money.share(订单运费, 退款商品金额, 商品金额合计)`」：命中（SPEC-003#3.2）
 
-上下文已保存：D:\oceanbase\wt-qoder-official\minimax\runs\run-20261029T201830-TASK-0007
+上下文已保存：D:\oceanbase\wt-qoder-official\minimax\runs\run-20261029T211801-TASK-0007
 
 --- exit_code: 0

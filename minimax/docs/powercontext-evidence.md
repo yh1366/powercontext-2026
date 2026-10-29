@@ -20,22 +20,26 @@ POST /v1/memory/remember          → 200  {"scope_id": "scp_...", "kind": "sdd-
 POST /v1/memory/entries/list      → 200  读回全部事件（分页，含 next_cursor）
 ```
 
-## 2. 写入的事件流（本次运行的 15 条）
+## 2. 写入的事件流
 
-`python -m sddctx demo sample` 一次运行产生的完整事件流（时间顺序）：
+`python -m sddctx demo sample` 一次运行产生的完整事件流（时间顺序，共 9 条；开头还有一条
+`state_reset` 标记，表示「从空状态开始记录」）：
 
-| # | 事件 | 关键 payload |
-| --- | --- | --- |
-| 1 | `verify` | `phase=before, exit_code=1, passed=false`，commit `4e05861`，run `verify-…200044` |
-| 2 | `context_built` | `run_id=run-…200045, spec_variant=v1`，命中 `SPEC-003#3.4/#3.2/#3.3`，backend `seekdb` |
-| 3 | `step_done` | `step=S1`（确认规格口径） |
-| 4 | `patch_applied` | `files=["demo_project/ordercore/refund.py"], patch="patches/TASK-0007.patch"` |
-| 5 | `step_done` | `step=S2`（实现运费分摊） |
-| 6 | `step_done` | `step=S3`（实现累计上限） |
-| 7 | `verify` | `phase=after, exit_code=0, passed=true` |
-| 8 | `step_done` | `step=S4`（运行测试并记录） |
-| 9 | `context_built` | `spec_variant=v2`（规格演进演练） |
-| 10–15 | 重复的 `verify` / `context_built` | 第二轮 `record_evidence.sh` 复跑，commit 与结论一致 |
+| # | 时刻 | 事件 | 关键 payload |
+| --- | --- | --- | --- |
+| 1 | 21:19:36 | `verify` | `phase=before, exit_code=1, passed=false`，commit `bb14d55` |
+| 2 | 21:19:42 | `context_built` | `run_id=run-…211941, spec_variant=v1`，backend `seekdb` |
+| 3 | 21:19:42 | `step_done` | `step=S1`（确认规格口径） |
+| 4 | 21:19:42 | `patch_applied` | `files=["demo_project/ordercore/refund.py"], patch="patches/TASK-0007.patch"` |
+| 5 | 21:19:43 | `step_done` | `step=S2`（实现运费分摊） |
+| 6 | 21:19:43 | `step_done` | `step=S3`（实现累计上限） |
+| 7 | 21:19:49 | `verify` | `phase=after, exit_code=0, passed=true` |
+| 8 | 21:19:50 | `step_done` | `step=S4`（运行测试并记录） |
+| 9 | 21:19:56 | `context_built` | `spec_variant=v2`（规格演进演练） |
+
+`demo sample` 开头会写一条 `state_reset`，所以事件数从 9 重新开始计数；
+上一轮累积的 25 条事件仍在 Scope 里（见 [`logs/19_state_show.log`](logs/19_state_show.log)），
+只是重置标记之后不再被折叠。
 
 ## 3. 复用：换一个进程读回来
 
@@ -45,7 +49,7 @@ POST /v1/memory/entries/list      → 200  读回全部事件（分页，含 nex
 ```
 $ python -m sddctx state show --task TASK-0007
 状态后端：powercontext / scp_588xvxtd5x499bcd231s2b2793
-事件数：15
+事件数：25
 已完成：
   - 确认 SPEC-003#3.2 运费分摊口径与 SPEC-003#3.4 累计上限口径
   - 在 RefundService.quote_partial_refund 中实现运费按商品金额占比分摊
@@ -66,8 +70,9 @@ $ python -m sddctx state show --task TASK-0007
    「已完成 / 待办 / 上次验证结论」，不会重复做已完成的事。
 2. **参与任务推进**：`verify` 与 `demo apply` 会写事件；`step_done` 把任务定义的 4 个步骤
    逐条推进，`待办` 随之减少。
-3. **跨会话恢复**：Server 重启后 Scope 与记忆仍在；`ensure_scope` 用幂等键找回同一个 Scope，
-   不会分裂出第二个状态库。
+3. **跨会话恢复（实测过）**：本轮开发中把 PowerContext Server 进程杀掉再重启，
+   重新 `state show` 仍然读到同一个 Scope `scp_588xvxtd5x499bcd231s2b2793` 与全部历史事件——
+   `ensure_scope` 用固定幂等键找回同一个 Scope，不会分裂出第二个状态库。
 
 ## 4. 空状态与重置
 

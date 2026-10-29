@@ -21,7 +21,7 @@ from sddctx.config import Settings
 from sddctx.db import Database
 from sddctx.retrieve import Hit, search_all
 from sddctx.state import StateStore, task_state_view
-from sddctx.textutil import now_iso
+from sddctx.textutil import now_iso, sha256_text
 
 # 每类的保留条数：规格按小节切（4 条覆盖到相关条款与相邻条款）；代码按符号切（5 条覆盖
 # 待改函数与其依赖）；测试保留 7 条，正好覆盖目标测试文件的 6 个用例 + 文件级说明，
@@ -112,6 +112,7 @@ def build_context(
     }
 
     checks = check_required_sources(task, sources, spec_variant)
+    files = load_target_files(settings, task, sources)
     payload: dict[str, Any] = {
         "run_id": run_id,
         "task_id": task["task_id"],
@@ -131,6 +132,7 @@ def build_context(
             "traces": traces,
         },
         "sources": sources,
+        "files": files,
         "state": state_view,
         "steps": task.get("steps", []),
         "target_tests": task.get("target_tests", []),
@@ -166,6 +168,43 @@ def build_context(
         )
         payload["run_dir"] = str(run_dir)
     return ContextPack(payload=payload, markdown=markdown, prompt=payload["prompt"])
+
+
+def load_target_files(
+    settings: Settings,
+    task: dict[str, Any],
+    sources: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """把「必需代码来源所在文件」的完整内容（带行号）放进上下文。
+
+    检索给出的是符号级片段，模型据此写 diff 时容易把行号与上下文行猜错，
+    补丁就打不上。给出完整文件后，hunk 头行号与上下文行都有唯一依据，
+    片段没覆盖到的相邻代码（辅助函数、常量）也能看到。
+    """
+    required = set(task.get("required_sources", {}).get("code", []))
+    paths: list[str] = []
+    for item in sources.get("code", []):
+        if required and item["source_id"] not in required:
+            continue
+        if item["path"] not in paths:
+            paths.append(item["path"])
+    files: list[dict[str, Any]] = []
+    for path in paths:
+        target = settings.root / path
+        if not target.is_file():
+            continue
+        text = target.read_text(encoding="utf-8")
+        raw_lines = text.splitlines()
+        numbered = "\n".join(f"{index:>4} | {line}" for index, line in enumerate(raw_lines, 1))
+        files.append(
+            {
+                "path": path,
+                "lines": [1, len(raw_lines)],
+                "sha256": sha256_text(text),
+                "content": numbered,
+            }
+        )
+    return files
 
 
 def check_required_sources(
@@ -257,6 +296,19 @@ def render_markdown(payload: dict[str, Any]) -> str:
             add("```")
             add("")
 
+    if payload.get("files"):
+        add("## 目标文件完整内容")
+        add("")
+        add("_行号即 unified diff 的 hunk 行号，请据此计算 hunk 头；上下文行必须逐字复制。_")
+        add("")
+        for item in payload["files"]:
+            add(f"### `{item['path']}`（{item['lines'][1]} 行）")
+            add("")
+            add("```")
+            add(item["content"].rstrip())
+            add("```")
+            add("")
+
     add("## 任务状态（PowerContext）")
     add("")
     state = payload["state"]
@@ -309,6 +361,14 @@ def render_prompt(payload: dict[str, Any]) -> str:
         add(item["content"].rstrip())
         add("```")
         add("")
+    if payload.get("files"):
+        add("目标文件完整内容（行号就是 diff 的 hunk 行号，上下文行必须逐字复制）：")
+        for item in payload["files"]:
+            add(f"- {item['path']}（共 {item['lines'][1]} 行）")
+            add("```")
+            add(item["content"].rstrip())
+            add("```")
+            add("")
     add("必须继续通过的既有测试：")
     for item in payload["sources"].get("test", []):
         if item["path"] in payload.get("regression_tests", []) or "existing" in item["path"]:

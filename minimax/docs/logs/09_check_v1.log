@@ -1,6 +1,6 @@
 $ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx check --task TASK-0007
 --- workdir: /d/oceanbase/wt-qoder-official/minimax
---- started: 2026-10-29T20:18:33+08:00
+--- started: 2026-10-29T21:18:03+08:00
 任务：TASK-0007  规格版本：v1
 必需来源齐全：是
   spec:

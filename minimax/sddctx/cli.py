@@ -10,6 +10,7 @@
     verify --task TASK-0007      运行目标测试与回归测试并记录状态
     state show|step-done|reset   查看 / 推进 / 清空任务状态（PowerContext）
     codegen --task TASK-0007     调用 MiniMax 生成代码修改（--apply 落地为快照）
+    models                       列出当前 Key 可用的 MiniMax 模型（核对模型名）
     demo reset|apply|sample      复现「修改前失败 / 修改后通过」与整条验证样例
     serve                        启动本地 HTTP 接口
 """
@@ -118,7 +119,16 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     settings = load_settings()
     db = open_database(settings)
     report = ingest(settings, db, spec_variant=args.variant, reset=args.reset)
-    print(f"导入完成（{report.backend}）：{report.documents} 个文档 / {report.chunks} 个块 / {report.terms} 个检索词")
+    total_chunks = db.scalar("SELECT COUNT(*) FROM pc_chunks")
+    total_postings = db.scalar("SELECT COUNT(*) FROM pc_postings")
+    print(
+        f"导入完成（{report.backend}）：扫描 {report.documents} 个文档"
+        f"（重建 {len(report.changed)} / 跳过 {report.unchanged}），"
+        f"本次生成 {report.chunks} 个块 / {report.postings} 条倒排"
+    )
+    print(
+        f"库内现有：{total_chunks} 个块 / {total_postings} 条倒排 / {report.terms} 个检索词"
+    )
     print(f"规格版本：{report.spec_variant}   耗时：{report.elapsed_ms} ms")
     for category, count in sorted(report.categories.items()):
         print(f"  {category}: {count} 个文档")
@@ -229,11 +239,35 @@ def cmd_state(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_models(args: argparse.Namespace) -> int:
+    from sddctx.minimax_client import MiniMaxError, list_models
+
+    settings = load_settings()
+    print(f"接口：{settings.minimax_base_url}/v1/models  key：{'已配置' if settings.minimax_api_key else '未配置'}")
+    try:
+        names = list_models(settings)
+    except MiniMaxError as exc:
+        print(f"[错误] {exc}", file=sys.stderr)
+        return 4
+    for name in names:
+        mark = "  ← 当前使用" if name == settings.minimax_model else ""
+        print(f"  - {name}{mark}")
+    return 0
+
+
 def cmd_codegen(args: argparse.Namespace) -> int:
     from sddctx.codegen import generate
 
     settings, db, store, reason = _open(args)
     task = load_task(settings, args.task)
+    # 先刷新索引：代码改过之后如果直接检索，命中的会是上一版文件，
+    # 模型就会照着旧实现（甚至已经改好的实现）写 diff。增量导入只重建变更文档。
+    report = ingest(settings, db, spec_variant=settings.spec_variant)
+    print(
+        f"索引已同步：{report.documents} 个文档（重建 {len(report.changed)} / 跳过 {report.unchanged}），"
+        f"耗时 {report.elapsed_ms} ms",
+        file=sys.stderr,
+    )
     pack = build_context(settings, db, store, task, state_fallback_reason=reason, persist=True)
     report = generate(
         settings,
@@ -319,6 +353,9 @@ def build_parser() -> argparse.ArgumentParser:
     state.add_argument("--json", action="store_true")
     state.set_defaults(func=cmd_state)
 
+    models_cmd = sub.add_parser("models", help="列出可用 MiniMax 模型")
+    models_cmd.set_defaults(func=cmd_models)
+
     code = sub.add_parser("codegen", help="调用 MiniMax 生成代码修改")
     code.add_argument("--task", default="TASK-0007")
     code.add_argument("--model", default=None)
@@ -341,6 +378,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from sddctx.minimax_client import MiniMaxError
+
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -352,6 +391,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[错误] 数据库不可用：{exc}", file=sys.stderr)
         print("提示：检查 SEEKDB_HOST/SEEKDB_PORT，或设置 SDDCTX_DB=sqlite 使用离线降级。", file=sys.stderr)
         return 3
+    except MiniMaxError as exc:
+        print(f"[错误] MiniMax 调用失败：{exc}", file=sys.stderr)
+        return 4
 
 
 if __name__ == "__main__":
