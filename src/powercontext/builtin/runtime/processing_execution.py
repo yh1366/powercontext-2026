@@ -69,7 +69,7 @@ class ScopeInvocation:
         intent = await self.guard(connection)
         self.dirty_generation = intent.dirty_generation
 
-    async def complete(self, connection: AsyncConnection, *, remaining_work: bool) -> None:
+    async def complete(self, connection: AsyncConnection, *, remaining_work: bool, retrigger: bool = False) -> None:
         await self.guard(connection)
         work = self.assignment
         await self.intents.acknowledge(
@@ -79,4 +79,11 @@ class ScopeInvocation:
             work.claimed_request_generation,
             clean_generation=None if remaining_work else self.dirty_generation,
         )
+        if retrigger:
+            # The window finished while the journal still holds enough new
+            # identities to justify the next launch threshold window. Re-accept
+            # one invocation in the same transaction so the requested channel
+            # redispatches this scope without waiting for new input; replaying
+            # this completion stays idempotent because acknowledge is.
+            await self.intents.request(connection, work.scope_id, work.binding_name)
         await self.leases.require_fence(connection, work.fence)

@@ -1773,13 +1773,15 @@ class _RelationalTriggers:
                         before = prepared.result if prepared.commit is None else prepared.commit.base
                         await on_commit(connection, before, updated)
                     if processing is not None:
+                        reaches = _remaining_reaches_threshold(
+                            through=action.through,
+                            high_watermark=high_watermark,
+                            threshold=retrigger_threshold,
+                        )
                         await processing.complete(
                             connection,
-                            remaining_work=_remaining_reaches_threshold(
-                                through=action.through,
-                                high_watermark=high_watermark,
-                                threshold=retrigger_threshold,
-                            ),
+                            remaining_work=reaches,
+                            retrigger=retrigger_threshold is not None and reaches,
                         )
             return MemoryFlushResult(
                 previous_cursor=action.after,
