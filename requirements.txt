@@ -1,0 +1,4 @@
+# StudyMind backend - minimal, always-installable dependency set (root shim).
+# Installs the web layer only, which is enough to boot the service and use the
+# in-memory fallback. For the real seekdb path use qoder/requirements-full.txt.
+-r qoder/requirements.txt
