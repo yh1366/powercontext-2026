@@ -914,6 +914,9 @@ class ScopedContextApplication:
         if base_pack is None:
             return pack
 
+        if isinstance(base_pack, (bytes, bytearray, memoryview)):
+            # A receiver that only kept the wire form should not have to decode by hand.
+            base_pack = ContextPack.from_bytes(bytes(base_pack))
         if not isinstance(base_pack, ContextPack):
             raise TypeError("base_pack must be a ContextPack instance")
 
