@@ -1,0 +1,11 @@
+{
+  "task_id": "TASK-0007",
+  "generated_at": "2026-10-29T19:46:41+08:00",
+  "before": {
+    "demo_project/ordercore/refund.py": "b07617c32cf8d523596181cdb14617ef6fa18f99fe5d3a4ba89b115fd66eb728"
+  },
+  "after": {
+    "demo_project/ordercore/refund.py": "f297e2c7d481f1b598775368d647ba3259bcf33351da64eccc6121b340d2ec46"
+  },
+  "note": "before = 任务开始时的代码（目标测试失败）；after = 应用 MiniMax 补丁后的代码。"
+}

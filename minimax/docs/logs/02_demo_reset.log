@@ -1,0 +1,6 @@
+$ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx demo reset
+--- workdir: /d/oceanbase/wt-qoder-official/minimax
+--- started: 2026-10-29T20:17:24+08:00
+已恢复到修改前：demo_project/ordercore/refund.py
+下一步：python -m sddctx verify --task TASK-0007 --phase before（预期目标测试失败）
+--- exit_code: 0

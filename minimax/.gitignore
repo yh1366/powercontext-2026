@@ -1,0 +1,8 @@
+# 运行产物：上下文包、测试日志、状态文件、SQLite 降级库
+runs/
+# 本地凭据
+.env.local
+# Python 缓存
+__pycache__/
+*.pyc
+.pytest_cache/

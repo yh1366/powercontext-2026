@@ -1,0 +1,22 @@
+$ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx state show --task TASK-0007
+--- workdir: /d/oceanbase/wt-qoder-official/minimax
+--- started: 2026-10-29T20:19:48+08:00
+状态后端：powercontext / scp_588xvxtd5x499bcd231s2b2793
+事件数：27
+已完成：
+  - 确认 SPEC-003#3.2 运费分摊口径与 SPEC-003#3.4 累计上限口径
+  - 在 RefundService.quote_partial_refund 中实现运费按商品金额占比分摊
+  - 实现累计退款上限：可退余额 = 实付 - 已退，超额截断并返回告警
+  - 运行目标测试与回归测试，记录退出码与结论
+待办：
+  - （无）
+验证记录：
+  - {'phase': 'before', 'exit_code': 1, 'passed': False, 'command': 'python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py', 'summary': '目标测试 失败（exit=1），回归测试 通过（exit=0）', 'at': '2026-10-29T20:00:44.781687+08:00'}
+  - {'phase': 'after', 'exit_code': 0, 'passed': True, 'command': 'python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py', 'summary': '目标测试 通过（exit=0），回归测试 通过（exit=0）', 'at': '2026-10-29T20:00:52.727910+08:00'}
+  - {'phase': 'before', 'exit_code': 1, 'passed': False, 'command': 'python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py', 'summary': '目标测试 失败（exit=1），回归测试 通过（exit=0）', 'at': '2026-10-29T20:05:43.578614+08:00'}
+  - {'phase': 'after', 'exit_code': 0, 'passed': True, 'command': 'python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py', 'summary': '目标测试 通过（exit=0），回归测试 通过（exit=0）', 'at': '2026-10-29T20:06:28.229829+08:00'}
+  - {'phase': 'before', 'exit_code': 1, 'passed': False, 'command': 'python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py', 'summary': '目标测试 失败（exit=1），回归测试 通过（exit=0）', 'at': '2026-10-29T20:14:05.812168+08:00'}
+  - {'phase': 'after', 'exit_code': 0, 'passed': True, 'command': 'python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py', 'summary': '目标测试 通过（exit=0），回归测试 通过（exit=0）', 'at': '2026-10-29T20:14:49.707111+08:00'}
+  - {'phase': 'before', 'exit_code': 1, 'passed': False, 'command': 'python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py', 'summary': '目标测试 失败（exit=1），回归测试 通过（exit=0）', 'at': '2026-10-29T20:18:08.285290+08:00'}
+  - {'phase': 'after', 'exit_code': 0, 'passed': True, 'command': 'python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py', 'summary': '目标测试 通过（exit=0），回归测试 通过（exit=0）', 'at': '2026-10-29T20:18:56.524426+08:00'}
+--- exit_code: 0

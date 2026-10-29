@@ -1,0 +1,26 @@
+$ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx ingest --reset
+--- workdir: /d/oceanbase/wt-qoder-official/minimax
+--- started: 2026-10-29T20:17:34+08:00
+导入完成（seekdb）：16 个文档 / 76 个块 / 1378 个检索词
+规格版本：v1   耗时：14542 ms
+  code: 6 个文档
+  spec: 4 个文档
+  test: 6 个文档
+  - specs/SPEC-001-order-pricing.md
+  - specs/SPEC-002-shipping.md
+  - specs/SPEC-003-refund.md
+  - specs/SPEC-004-refund-audit.md
+  - demo_project/ordercore/__init__.py
+  - demo_project/ordercore/models.py
+  - demo_project/ordercore/money.py
+  - demo_project/ordercore/pricing.py
+  - demo_project/ordercore/refund.py
+  - demo_project/ordercore/shipping.py
+  - demo_project/tests/__init__.py
+  - demo_project/tests/conftest.py
+  - demo_project/tests/test_pricing.py
+  - demo_project/tests/test_refund_existing.py
+  - demo_project/tests/test_refund_shipping_allocation.py
+  - demo_project/tests/test_shipping.py
+SQL 抽样：INSERT INTO pc_postings ...（3685 行）、INSERT INTO pc_df SELECT term, COUNT(*) FROM pc_postings GROUP BY term
+--- exit_code: 0

@@ -7,9 +7,11 @@
 - 项目代码与详细说明：**[`qoder/`](qoder/README.md)**
 - 真实运行验证记录：**[`qoder/docs/evidence.md`](qoder/docs/evidence.md)**
 
-> 本仓库根目录的 `dify/`、`gaode/`、`minimax/`、`stepfun/` 是赛事官方模板目录，**不参与本次提交**。
-> 本次提交的作品全部位于 `qoder/`，根目录的 `app.py` / `main.py` / `requirements.txt` 只是为了让评审
-> 在任意目录下都能用一条命令启动，不改变项目结构。
+> 本仓库根目录的 `dify/`、`gaode/`、`minimax/`、`stepfun/` 是赛事官方模板目录。
+> 其中 **`qoder/`** 是本仓库的 Qoder 赛道作品（StudyMind），根目录的 `app.py` / `main.py` /
+> `requirements.txt` 只是让评审在任意目录下都能用一条命令启动它。
+> **`minimax/`** 是 MiniMax 赛道的作品（「规有所依」SDD 上下文管理系统），
+> 入口与说明见 **[`minimax/README.md`](minimax/README.md)**，与 `qoder/` 完全独立、互不影响。
 
 ## 快速开始（不需要 Docker，不需要任何外部服务）
 

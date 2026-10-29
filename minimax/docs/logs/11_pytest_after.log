@@ -1,0 +1,6 @@
+$ /d/oceanbase/pc-venv/Scripts/python.exe -m pytest -q -p no:cacheprovider demo_project/tests
+--- workdir: /d/oceanbase/wt-qoder-official/minimax
+--- started: 2026-10-29T20:18:43+08:00
+......................                                                   [100%]
+22 passed in 0.11s
+--- exit_code: 0

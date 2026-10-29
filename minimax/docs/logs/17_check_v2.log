@@ -1,0 +1,20 @@
+$ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx check --task TASK-0007 --variant v2
+--- workdir: /d/oceanbase/wt-qoder-official/minimax
+--- started: 2026-10-29T20:19:34+08:00
+任务：TASK-0007  规格版本：v2
+必需来源齐全：是
+  spec:
+    ✓ SPEC-003#3.2
+    ✓ SPEC-003#3.4
+  code:
+    ✓ demo_project/ordercore/refund.py::RefundService.quote_partial_refund
+    ✓ demo_project/ordercore/money.py::share
+  test:
+    ✓ demo_project/tests/test_refund_shipping_allocation.py::test_partial_refund_allocates_shipping_by_goods_share
+    ✓ demo_project/tests/test_refund_shipping_allocation.py::test_full_refund_returns_all_shipping
+    ✓ demo_project/tests/test_refund_shipping_allocation.py::test_cumulative_refund_is_capped_by_paid_amount
+  标记「运费退款 = `money.share(订单运费, 退款商品金额, 商品金额合计)`」：命中（SPEC-003#3.2）
+  标记「尾差归入分摊后金额最大的商品行」：命中（SPEC-003#3.2）
+  期望规格版本 v2，实际 v2
+结论：通过
+--- exit_code: 0

@@ -1,0 +1,6 @@
+# sddctx 运行依赖（刻意保持最小，干净环境 pip 一步装完）
+# - pymysql：seekdb / OceanBase 的 MySQL 协议驱动（纯 Python，无需编译）
+# - pytest：验证样例要跑业务工程的目标测试与回归测试
+# PowerContext 与 MiniMax 都通过 HTTP + 标准库 urllib 访问，不需要额外 SDK。
+pymysql>=1.1.0
+pytest>=8.0.0

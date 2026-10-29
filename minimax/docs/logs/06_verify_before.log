@@ -1,0 +1,35 @@
+$ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx verify --task TASK-0007 --phase before
+--- workdir: /d/oceanbase/wt-qoder-official/minimax
+--- started: 2026-10-29T20:17:58+08:00
+任务：TASK-0007  阶段：before  代码版本：4e0586184e47
+目标测试：exit=1  失败
+    E       AssertionError: assert 4165 == 465
+    E        +  where 4165 = RefundQuote(skus=('SKU-A', 'SKU-B', 'SKU-C'), goods_refund_cents=4165, shipping_refund_cents=0, total_refund_cents=4165, warnings=('shipping allocation missing for full refund (SPEC-003#3.2)',)).total_refund_cents
+    
+    demo_project\tests\test_refund_shipping_allocation.py:62: AssertionError
+    _________________ test_cumulative_refund_never_goes_negative __________________
+    
+    service = <ordercore.refund.RefundService object at 0x000001EE26EE9C70>
+    
+        def test_cumulative_refund_never_goes_negative(service: RefundService) -> None:
+            """SPEC-003#3.4 第 3 条：历史数据已超额退款时，本次可退金额为 0，不得返回负数，并给出告警。"""
+            order = build_order(member_tier="silver", coupon_cents=200, refunded_cents=9_999)
+            quote = service.quote_partial_refund(order, ["SKU-A"])
+    >       assert quote.total_refund_cents == 0
+    E       AssertionError: assert 1388 == 0
+    E        +  where 1388 = RefundQuote(skus=('SKU-A',), goods_refund_cents=1388, shipping_refund_cents=0, total_refund_cents=1388, warnings=()).total_refund_cents
+    
+    demo_project\tests\test_refund_shipping_allocation.py:70: AssertionError
+    =========================== short test summary info ===========================
+    FAILED demo_project/tests/test_refund_shipping_allocation.py::test_partial_refund_allocates_shipping_by_goods_share
+    FAILED demo_project/tests/test_refund_shipping_allocation.py::test_full_refund_returns_all_shipping
+    FAILED demo_project/tests/test_refund_shipping_allocation.py::test_remote_region_shipping_is_allocated_too
+    FAILED demo_project/tests/test_refund_shipping_allocation.py::test_allocation_rounds_half_up
+    FAILED demo_project/tests/test_refund_shipping_allocation.py::test_cumulative_refund_is_capped_by_paid_amount
+    FAILED demo_project/tests/test_refund_shipping_allocation.py::test_cumulative_refund_never_goes_negative
+    6 failed in 0.44s
+回归测试：exit=0  通过
+    ................                                                         [100%]
+    16 passed in 0.11s
+结论：目标测试 失败（exit=1），回归测试 通过（exit=0）
+--- exit_code: 1

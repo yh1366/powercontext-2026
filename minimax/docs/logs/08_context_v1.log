@@ -1,0 +1,374 @@
+$ /d/oceanbase/pc-venv/Scripts/python.exe -m sddctx context --task TASK-0007
+--- workdir: /d/oceanbase/wt-qoder-official/minimax
+--- started: 2026-10-29T20:18:19+08:00
+# 开发上下文 · TASK-0007 部分退款按商品金额占比分摊运费，并限制累计退款不超过实付金额
+
+- 生成时间：2026-10-29T20:18:30+08:00
+- 上下文编号：`run-20261029T201830-TASK-0007`
+- 规格版本：`v1`
+- 资料库：`seekdb`（seekdb/MySQL 5.7.25-OceanBase seekdb-v1.4.0.0，库 `sddctx`）
+
+## 任务
+
+退款服务当前只退还商品金额，运费一律不退：部分退款时用户少收运费，整单退款时退款总额也不等于实付金额；多次退款之间还没有累计校验，历史数据里出现过累计退款超过实付的脏账。本次任务按 SPEC-003#3.2 实现运费按商品金额占比分摊、按 SPEC-003#3.4 实现可退余额上限与告警，并且不得改变既有计价、运费与退款行为。
+
+## 适用规格条目（4）
+
+### `SPEC-003#3.4`
+
+- 文件：`specs/SPEC-003-refund.md` 第 30–38 行
+- 相关度：72.0526（命中词：003, cents, quote, refund, spec, spec-003#3.4）
+- 入选理由：命中任务关键词 003, cents, quote, refund；条款 SPEC-003#3.4 直接约束本次改动
+- 规格版本：`v1.0`
+
+```
+## 3.4 累计退款上限
+
+同一订单允许多次部分退款，但**累计退款金额（商品退款 + 运费退款）不得超过实付金额**：
+
+1. 可退余额 = `订单实付金额 - 已退金额`（`refunded_cents`）。
+2. 本次试算总额超过可退余额时，截断到可退余额，并在 `RefundQuote.warnings` 中返回告警文本。
+3. 可退余额小于 0（历史数据异常、已超额退款）时，本次可退金额为 0，不得返回负数，同样返回告警。
+4. 未触及上限的正常退款不得产生告警，以免告警泛滥导致人工复核失效。
+```
+
+### `SPEC-003#3.2`
+
+- 文件：`specs/SPEC-003-refund.md` 第 14–23 行
+- 相关度：55.4107（命中词：003, cents, half, half_up, money, refund）
+- 入选理由：命中任务关键词 003, cents, half, half_up；条款 SPEC-003#3.2 直接约束本次改动
+- 规格版本：`v1.0`
+
+```
+## 3.2 运费分摊
+
+退款必须按商品金额占比分摊订单运费，不允许把运费整笔吞掉或整笔退还：
+
+1. 分摊比例 = 本次退款商品金额 / 订单商品金额合计（折扣前口径，与 SPEC-003#3.3 一致）。
+2. 运费退款 = `money.share(订单运费, 退款商品金额, 商品金额合计)`，即先做精确十进制除法，再 HALF_UP 取整到分。
+3. 当本次退款覆盖订单全部商品时，直接退还全部运费，避免占比相除后出现 1 分尾差。
+4. 订单运费为 0（包邮）时，运费退款为 0，且不得触发除零错误。
+5. 运费的来源是订单快照的 `shipping_cents`，不重新按 SPEC-002 计算运费。
+```
+
+### `SPEC-003#3.3`
+
+- 文件：`specs/SPEC-003-refund.md` 第 24–29 行
+- 相关度：37.601（命中词：003, money, refund, share, spec, 也不）
+- 入选理由：命中任务关键词 003, money, refund, share；条款 SPEC-003#3.3 直接约束本次改动
+- 规格版本：`v1.0`
+
+```
+## 3.3 折扣与优惠券回退
+
+会员折扣与优惠券按与 #3.2 相同的商品金额占比回退：`money.share(订单折扣, 退款商品金额, 商品金额合计)`、
+`money.share(订单优惠券, 退款商品金额, 商品金额合计)`。商品退款金额 = 退款商品金额 − 折扣回退 − 优惠券回退。
+回退金额不得为负，也不得超过订单实际使用的折扣/优惠券总额。
+```
+
+### `SPEC-001#1.2`
+
+- 文件：`specs/SPEC-001-order-pricing.md` 第 10–21 行
+- 相关度：22.2129（命中词：half, half_up, money, pricing, spec, up）
+- 入选理由：命中任务关键词 half, half_up, money, pricing；条款 SPEC-001#1.2 直接约束本次改动
+- 规格版本：`v1.2`
+
+```
+## 1.2 会员折扣
+
+会员折扣按商品金额合计计算，使用 `money.apply_rate` 以 HALF_UP 取整到分：
+
+| 会员等级 | 折扣率 |
+| --- | --- |
+| none | 0% |
+| silver | 3% |
+| gold | 8% |
+
+折扣率变更属于运营配置变更，需要同步更新 `pricing.MEMBER_DISCOUNT_RATES` 与本文档。
+```
+
+## 需要修改的代码（5）
+
+### `demo_project/ordercore/refund.py::RefundService.quote_partial_refund`
+
+- 文件：`demo_project/ordercore/refund.py` 第 49–79 行
+- 相关度：56.5064（命中词：003, allocation, cents, money, partial, py）
+- 入选理由：符号 demo_project/ordercore/refund.py::RefundService.quote_partial_refund 是本次需要修改的位置（命中的词：003, allocation, cents, money）
+
+```
+    def quote_partial_refund(self, order: Order, skus: Sequence[str]) -> RefundQuote:
+        wanted = tuple(dict.fromkeys(skus))
+        if not wanted:
+            raise EmptyRefundError("at least one sku is required")
+        lines = {line.sku: line for line in order.lines}
+        unknown = tuple(sku for sku in wanted if sku not in lines)
+        if unknown:
+            raise UnknownSkuError(f"sku not in order {order.order_id}: {', '.join(unknown)}")
+
+        goods_total = order.goods_cents
+        refund_goods = sum(lines[sku].amount_cents for sku in wanted)
+
+        # SPEC-003#3.3：会员折扣与优惠券按商品金额占比回退。
+        discount_back = money.share(order.discount_cents, refund_goods, goods_total)
+        coupon_back = money.share(order.coupon_cents, refund_goods, goods_total)
+        goods_refund = refund_goods - discount_back - coupon_back
+
+        # TODO(TASK-0007): SPEC-003#3.2 运费分摊尚未实现，暂时不退还运费。
+        shipping_refund = 0
+
+        total_refund = goods_refund + shipping_refund
+        warnings: tuple[str, ...] = ()
+        if refund_goods == goods_total:
+            warnings = ("shipping allocation missing for full refund (SPEC-003#3.2)",)
+        return RefundQuote(
+            skus=wanted,
+            goods_refund_cents=goods_refund,
+            shipping_refund_cents=shipping_refund,
+            total_refund_cents=total_refund,
+            warnings=warnings,
+        )
+```
+
+### `demo_project/ordercore/refund.py::<module>`
+
+- 文件：`demo_project/ordercore/refund.py` 第 1–15 行
+- 相关度：39.3754（命中词：003, money, py, refund, spec, spec-003#3.2）
+- 入选理由：符号 demo_project/ordercore/refund.py::<module> 是本次需要修改的位置（命中的词：003, money, py, refund）
+
+```
+"""退款规则（SPEC-003）。
+
+本文件是 TASK-0007 的被改对象：现有实现只覆盖了「商品金额 + 折扣/优惠券回退」，
+运费分摊（SPEC-003#3.2）与累计退款上限（SPEC-003#3.4）尚未实现。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from collections.abc import Sequence
+
+from ordercore import money
+from ordercore.models import Order
+```
+
+### `demo_project/ordercore/money.py::share`
+
+- 文件：`demo_project/ordercore/money.py` 第 10–23 行
+- 相关度：30.4234（命中词：003, cents, half, half_up, money, py）
+- 入选理由：符号 demo_project/ordercore/money.py::share 是本次需要修改的位置（命中的词：003, cents, half, half_up）
+
+```
+def share(amount_cents: int, numerator: int, denominator: int) -> int:
+    """按 ``numerator / denominator`` 摊分 ``amount_cents``，四舍五入到分（HALF_UP）。
+
+    这是 SPEC-003#3.2 与 SPEC-003#3.3 指定的唯一分摊口径：
+    先做精确的十进制乘法/除法，再一次性取整，禁止用浮点数相加后再取整。
+    """
+    if denominator <= 0:
+        raise ValueError("denominator must be positive")
+    if numerator < 0:
+        raise ValueError("numerator must not be negative")
+    if amount_cents == 0 or numerator == 0:
+        return 0
+    exact = Decimal(amount_cents) * Decimal(numerator) / Decimal(denominator)
+    return int(exact.quantize(_CENT, rounding=ROUND_HALF_UP))
+```
+
+### `demo_project/ordercore/pricing.py::member_discount`
+
+- 文件：`demo_project/ordercore/pricing.py` 第 30–36 行
+- 相关度：29.7871（命中词：cents, half, half_up, money, pricing, py）
+- 入选理由：符号 demo_project/ordercore/pricing.py::member_discount 是本次需要修改的位置（命中的词：cents, half, half_up, money）
+
+```
+def member_discount(goods_cents: int, member_tier: str) -> int:
+    """SPEC-001#1.2：会员折扣按商品金额计算，HALF_UP 取整到分。"""
+    try:
+        rate = MEMBER_DISCOUNT_RATES[member_tier]
+    except KeyError as exc:  # pragma: no cover - 由 Order 校验兜底
+        raise ValueError(f"unknown member_tier: {member_tier}") from exc
+    return money.apply_rate(goods_cents, rate)
+```
+
+### `demo_project/ordercore/__init__.py::<module>`
+
+- 文件：`demo_project/ordercore/__init__.py` 第 1–32 行
+- 相关度：24.1402（命中词：money, pricing, py, quote, refund, refundservice）
+- 入选理由：符号 demo_project/ordercore/__init__.py::<module> 是本次需要修改的位置（命中的词：money, pricing, py, quote）
+
+```
+"""ordercore —— 订单计价、运费与退款的核心服务（纯标准库实现）。
+
+这个包是一个可运行、带测试的真实业务工程切片，用来作为本作品
+「SDD 上下文管理系统」的被改对象。它没有任何第三方依赖，
+`pip install -r requirements.txt` 之后可以直接 `pytest`。
+"""
+
+from ordercore.money import share
+from ordercore.models import Order, OrderLine
+from ordercore.pricing import Quote, quote
+from ordercore.refund import (
+    EmptyRefundError,
+    RefundQuote,
+    RefundService,
+    UnknownSkuError,
+)
+from ordercore.shipping import calc_shipping
+
+__all__ = [
+    "EmptyRefundError",
+    "Order",
+    "OrderLine",
+    "Quote",
+    "RefundQuote",
+    "RefundService",
+    "UnknownSkuError",
+    "calc_shipping",
+    "quote",
+    "share",
+]
+
+__version__ = "1.3.0"
+```
+
+## 验证用测试（7）
+
+### `demo_project/tests/test_refund_shipping_allocation.py::test_full_refund_returns_all_shipping`
+
+- 文件：`demo_project/tests/test_refund_shipping_allocation.py` 第 30–34 行
+- 相关度：76.6322（命中词：003, allocation, cents, partial, py, quote）
+- 入选理由：该用例覆盖任务要求的可验证行为（命中的词：003, allocation, cents, partial）
+
+```
+def test_full_refund_returns_all_shipping(service: RefundService, basic_order) -> None:
+    """SPEC-003#3.2 第 3 条：整单退款必须原路退回全部运费，退款总额等于实付金额。"""
+    quote = service.quote_partial_refund(basic_order, ["SKU-A", "SKU-B", "SKU-C"])
+    assert quote.shipping_refund_cents == basic_order.shipping_cents == 800
+    assert quote.total_refund_cents == basic_order.paid_cents == 4965
+```
+
+### `demo_project/tests/test_refund_shipping_allocation.py::<module>`
+
+- 文件：`demo_project/tests/test_refund_shipping_allocation.py` 第 1–16 行
+- 相关度：65.0604（命中词：003, allocation, py, refund, refundservice, service）
+- 入选理由：该用例覆盖任务要求的可验证行为（命中的词：003, allocation, py, refund）
+
+```
+"""TASK-0007 目标功能测试：部分退款运费分摊（SPEC-003#3.2）与累计退款上限（SPEC-003#3.4）。
+
+这组用例在修改前必须全部失败（实现里没有运费分摊、也没有累计上限校验），
+修改后必须全部通过；它们由规格直接推导而来，不依赖任何内部实现细节。
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from ordercore.models import Order, OrderLine
+from ordercore.refund import RefundService
+
+from tests.conftest import build_order
+```
+
+### `demo_project/tests/test_refund_shipping_allocation.py::test_remote_region_shipping_is_allocated_too`
+
+- 文件：`demo_project/tests/test_refund_shipping_allocation.py` 第 37–42 行
+- 相关度：60.8293（命中词：003, allocation, cents, partial, py, quote）
+- 入选理由：该用例覆盖任务要求的可验证行为（命中的词：003, allocation, cents, partial）
+
+```
+def test_remote_region_shipping_is_allocated_too(service: RefundService, remote_order) -> None:
+    """SPEC-003#3.2：偏远地区运费 2000 同样按商品金额占比分摊 → 2000 × 1500 / 4500 = 666.67 → 667。"""
+    quote = service.quote_partial_refund(remote_order, ["SKU-A"])
+    assert quote.goods_refund_cents == 1388
+    assert quote.shipping_refund_cents == 667
+    assert quote.total_refund_cents == 2055
+```
+
+### `demo_project/tests/test_refund_shipping_allocation.py::test_partial_refund_allocates_shipping_by_goods_share`
+
+- 文件：`demo_project/tests/test_refund_shipping_allocation.py` 第 22–27 行
+- 相关度：58.9479（命中词：003, allocation, cents, partial, py, quote）
+- 入选理由：该用例覆盖任务要求的可验证行为（命中的词：003, allocation, cents, partial）
+
+```
+def test_partial_refund_allocates_shipping_by_goods_share(service: RefundService, basic_order) -> None:
+    """SPEC-003#3.2 运费分摊：退 2000/4500 的商品，运费 800 按同一占比分摊 → 800 × 2000 / 4500 = 355.56 → 356。"""
+    quote = service.quote_partial_refund(basic_order, ["SKU-B"])
+    assert quote.goods_refund_cents == 1851
+    assert quote.shipping_refund_cents == 356
+    assert quote.total_refund_cents == 2207
+```
+
+### `demo_project/tests/test_refund_shipping_allocation.py::test_cumulative_refund_never_goes_negative`
+
+- 文件：`demo_project/tests/test_refund_shipping_allocation.py` 第 66–71 行
+- 相关度：58.6192（命中词：003, allocation, cents, partial, py, quote）
+- 入选理由：该用例覆盖任务要求的可验证行为（命中的词：003, allocation, cents, partial）
+
+```
+def test_cumulative_refund_never_goes_negative(service: RefundService) -> None:
+    """SPEC-003#3.4 第 3 条：历史数据已超额退款时，本次可退金额为 0，不得返回负数，并给出告警。"""
+    order = build_order(member_tier="silver", coupon_cents=200, refunded_cents=9_999)
+    quote = service.quote_partial_refund(order, ["SKU-A"])
+    assert quote.total_refund_cents == 0
+    assert quote.warnings
+```
+
+### `demo_project/tests/test_refund_shipping_allocation.py::test_allocation_rounds_half_up`
+
+- 文件：`demo_project/tests/test_refund_shipping_allocation.py` 第 45–55 行
+- 相关度：55.6916（命中词：003, allocation, cents, half, half_up, partial）
+- 入选理由：该用例覆盖任务要求的可验证行为（命中的词：003, allocation, cents, half）
+
+```
+def test_allocation_rounds_half_up(service: RefundService) -> None:
+    """SPEC-003#3.2 取整口径：分摊金额出现 0.5 分时必须 HALF_UP（903 × 500 / 1000 = 451.5 → 452）。"""
+    order = Order(
+        order_id="O-HALF-UP",
+        lines=(OrderLine("SKU-A", 500, 1), OrderLine("SKU-B", 500, 1)),
+        shipping_cents=903,
+        paid_cents=1_903,
+    )
+    quote = service.quote_partial_refund(order, ["SKU-A"])
+    assert quote.shipping_refund_cents == 452
+    assert quote.total_refund_cents == 952
+```
+
+### `demo_project/tests/test_refund_shipping_allocation.py::test_cumulative_refund_is_capped_by_paid_amount`
+
+- 文件：`demo_project/tests/test_refund_shipping_allocation.py` 第 58–63 行
+- 相关度：50.983（命中词：003, allocation, cents, partial, py, quote）
+- 入选理由：该用例覆盖任务要求的可验证行为（命中的词：003, allocation, cents, partial）
+
+```
+def test_cumulative_refund_is_capped_by_paid_amount(service: RefundService) -> None:
+    """SPEC-003#3.4 累计退款上限：同一订单已退 4500 后再退，可退余额 = 实付 4965 - 已退 4500 = 465，超出部分截断并给出告警。"""
+    order = build_order(member_tier="silver", coupon_cents=200, refunded_cents=4_500)
+    quote = service.quote_partial_refund(order, ["SKU-A", "SKU-B", "SKU-C"])
+    assert quote.total_refund_cents == 465
+    assert quote.warnings, "被上限截断时必须返回 warning"
+```
+
+## 任务状态（PowerContext）
+
+- 状态后端：`powercontext`（scope: `scp_588xvxtd5x499bcd231s2b2793`）
+- 已完成：确认 SPEC-003#3.2 运费分摊口径与 SPEC-003#3.4 累计上限口径；在 RefundService.quote_partial_refund 中实现运费按商品金额占比分摊；实现累计退款上限：可退余额 = 实付 - 已退，超额截断并返回告警；运行目标测试与回归测试，记录退出码与结论
+- 待办：无
+- 已有验证结果：
+  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:00:44.781687+08:00）
+  - after：exit=0，passed=True，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:00:52.727910+08:00）
+  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:05:43.578614+08:00）
+  - after：exit=0，passed=True，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:06:28.229829+08:00）
+  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:14:05.812168+08:00）
+  - after：exit=0，passed=True，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:14:49.707111+08:00）
+  - before：exit=1，passed=False，`python -m pytest -q demo_project/tests/test_refund_shipping_allocation.py  &&  python -m pytest -q demo_project/tests/test_pricing.py demo_project/tests/test_shipping.py demo_project/tests/test_refund_existing.py`（2026-10-29T20:18:08.285290+08:00）
+
+## 验收自检
+
+- 必需来源是否齐全：**是**
+  - 标记「运费退款 = `money.share(订单运费, 退款商品金额, 商品金额合计)`」：命中（SPEC-003#3.2）
+
+上下文已保存：D:\oceanbase\wt-qoder-official\minimax\runs\run-20261029T201830-TASK-0007
+
+--- exit_code: 0
