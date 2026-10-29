@@ -71,21 +71,24 @@ OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ## 2. 启动应用
 
 ```bash
-cd qoder
-
-# 安装依赖
+# 安装依赖（最小集，任何机器都可安装）
 pip install -r requirements.txt
+# 需要真实 seekdb 检索时改用完整集：
+# pip install -r requirements-full.txt
 
-# 复制并编辑配置
+# 复制并编辑配置（可选，不配也能启动）
 cp .env.example .env
-# 根据实际情况修改 .env
 
-# 启动后端
-cd backend
-python app.py
+# 启动后端（两个入口等价）
+python app.py                 # 仓库根目录
+# python qoder/backend/app.py # 或在 qoder 目录内
 
 # 访问 http://localhost:5000
+# 可用 PORT/HOST 环境变量改监听地址
 ```
+
+不启动 seekdb / PowerContext 也能运行：后端会退回内存实现，页面与主要功能可用，
+`/api/health` 显示 `mode=degraded`。Linux 上装了 `pylibseekdb` 会自动改用嵌入式 seekdb。
 
 ## 3. 通过 Qoder Sites 部署
 
