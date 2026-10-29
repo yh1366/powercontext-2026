@@ -198,25 +198,29 @@ python app.py
 ## 项目结构
 
 ```
-qoder/
-├── README.md
-├── requirements.txt              # 后端依赖（含 pyseekdb）
-├── .env.example                  # 环境变量模板
-├── backend/
-│   ├── app.py                    # Flask API
-│   ├── config.py                 # 配置
-│   ├── seekdb_client.py          # seekdb：存储 + 混合检索
-│   └── powercontext_client.py    # PowerContext：记忆读写 + 上下文
-├── frontend/
-│   ├── index.html
-│   ├── css/style.css
-│   └── js/app.js
-├── functions/index.ts            # Qoder Sites 边缘函数（线上演示模式）
-├── docs/
-│   ├── setup.md                  # 部署细节
-│   ├── demo.md                   # 演示脚本
-│   └── evidence.md               # 真实运行验证记录
-└── scripts/init_db.py            # 可选：初始化示例数据
+powercontext-2026/
+├── app.py                        # 根目录入口（转发到 qoder/backend/app.py）
+├── requirements.txt              # 根目录依赖（= qoder/requirements.txt，最小可安装集）
+└── qoder/
+    ├── README.md
+    ├── requirements.txt          # 最小依赖集（Web 层，任何机器可安装）
+    ├── requirements-full.txt     # 完整依赖（+ pyseekdb/onnxruntime，真实检索用）
+    ├── .env.example              # 环境变量模板
+    ├── backend/
+    │   ├── app.py                # Flask API（唯一实现）
+    │   ├── config.py             # 配置
+    │   ├── seekdb_client.py      # seekdb：存储 + 混合检索
+    │   └── powercontext_client.py# PowerContext：记忆读写 + 上下文
+    ├── frontend/
+    │   ├── index.html
+    │   ├── css/style.css
+    │   └── js/app.js
+    ├── functions/index.ts        # Qoder Sites 边缘函数（线上演示模式）
+    ├── docs/
+    │   ├── setup.md              # 部署细节
+    │   ├── demo.md               # 演示脚本
+    │   └── evidence.md           # 真实运行验证记录
+    └── scripts/init_db.py        # 可选：初始化示例数据
 ```
 
 ## 已知限制
