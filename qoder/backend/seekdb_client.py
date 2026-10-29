@@ -16,6 +16,7 @@ Implementation notes:
 import os
 import sys
 import json
+import socket
 import hashlib
 import logging
 from datetime import datetime
@@ -71,6 +72,21 @@ def _ensure_database(host, port, user, password, database):
         logger.warning('could not ensure database %s: %s', database, exc)
 
 
+def _port_open(host, port, timeout=1.5):
+    """Cheap reachability probe.
+
+    Connecting through pyseekdb to a dead port costs ~15s of retries, which is
+    enough to make an automated health check time out. Bail out early instead.
+    """
+    if not host:
+        return False
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 class SeekDBClient:
     """seekdb-backed study material store with vector + full-text retrieval."""
 
@@ -78,12 +94,16 @@ class SeekDBClient:
     EMBEDDING_DIM = 384          # all-MiniLM-L6-v2
     ANALYZER = 'ik'              # IK full-text analyzer bundled with seekdb
 
-    def __init__(self, host=None, port=None, user=None, password=None, database=None):
-        self.host = host or 'localhost'
+    def __init__(self, host=None, port=None, user=None, password=None, database=None,
+                 path=None):
+        self.host = host or ''
         self.port = port or 2881
         self.user = user or 'root'
         self.password = password or ''
         self.database = database or 'study_mind'
+        self.path = path or os.getenv('SEEKDB_PATH') or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'seekdb')
+        self.backend = None          # 'embedded' | 'server'
         self.client = None
         self.collection = None
         self.embedding_function = None
@@ -91,9 +111,45 @@ class SeekDBClient:
 
     # ---------- lifecycle ----------
 
-    def _init_client(self):
-        if not SEEKDB_AVAILABLE:
-            return
+    def _setup_collection(self):
+        self.embedding_function = pyseekdb.DefaultEmbeddingFunction()
+        self.collection = self.client.get_or_create_collection(
+            name=self.COLLECTION_NAME,
+            schema=Schema(
+                vector_index=IVFConfiguration(
+                    dimension=self.EMBEDDING_DIM,
+                    distance='cosine',
+                ),
+                fulltext_index=FulltextIndexConfig(analyzer=self.ANALYZER),
+            ),
+            embedding_function=self.embedding_function,
+        )
+
+    def _connect_embedded(self):
+        """Embedded seekdb: a local on-disk database, no server or port needed.
+
+        Requires pylibseekdb, which currently ships Linux wheels only, so this
+        path is skipped on Windows/macOS and the remote path is used instead.
+        """
+        try:
+            os.makedirs(self.path, exist_ok=True)
+            self.client = pyseekdb.Client(path=self.path, database=self.database)
+            self._setup_collection()
+            self.backend = 'embedded'
+            logger.info('seekdb ready (embedded): %s collection=%s',
+                        self.path, self.COLLECTION_NAME)
+            return True
+        except Exception as exc:
+            logger.info('embedded seekdb not available (%s)', str(exc)[:140])
+            self.client = None
+            self.collection = None
+            return False
+
+    def _connect_server(self):
+        """seekdb over the MySQL protocol (a running seekdb server)."""
+        if not _port_open(self.host, self.port):
+            logger.info('seekdb server %s:%s not listening', self.host, self.port)
+            return False
         _ensure_database(self.host, self.port, self.user, self.password, self.database)
         try:
             self.client = pyseekdb.Client(
@@ -103,26 +159,32 @@ class SeekDBClient:
                 password=self.password,
                 database=self.database,
             )
-            self.embedding_function = pyseekdb.DefaultEmbeddingFunction()
-            self.collection = self.client.get_or_create_collection(
-                name=self.COLLECTION_NAME,
-                schema=Schema(
-                    vector_index=IVFConfiguration(
-                        dimension=self.EMBEDDING_DIM,
-                        distance='cosine',
-                    ),
-                    fulltext_index=FulltextIndexConfig(analyzer=self.ANALYZER),
-                ),
-                embedding_function=self.embedding_function,
-            )
-            logger.info(
-                'seekdb ready: %s:%s/%s collection=%s',
-                self.host, self.port, self.database, self.COLLECTION_NAME,
-            )
+            self._setup_collection()
+            self.backend = 'server'
+            logger.info('seekdb ready (server): %s:%s/%s collection=%s',
+                        self.host, self.port, self.database, self.COLLECTION_NAME)
+            return True
         except Exception as exc:
-            logger.warning('seekdb init failed, will use fallback: %s', exc)
+            logger.info('seekdb server not reachable (%s)', str(exc)[:140])
             self.client = None
             self.collection = None
+            return False
+
+    def _init_client(self):
+        if not SEEKDB_AVAILABLE:
+            return
+        # An explicit SEEKDB_HOST means "use the server I configured".
+        # Otherwise prefer the embedded engine so the project runs on a bare
+        # machine with nothing else installed, then fall back to localhost.
+        if self.host:
+            if self._connect_server():
+                return
+            self._connect_embedded()
+            return
+        if self._connect_embedded():
+            return
+        self.host = 'localhost'
+        self._connect_server()
 
     def health_check(self):
         try:

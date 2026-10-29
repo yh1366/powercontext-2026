@@ -1,0 +1,20 @@
+# StudyMind backend - full dependency set (real seekdb retrieval).
+#
+# Adds the seekdb Python SDK on top of requirements.txt. pyseekdb talks to a
+# seekdb server over the MySQL protocol and ships a local all-MiniLM-L6-v2
+# ONNX embedding function (384 dims), so no external API key is needed.
+#
+# Install with:
+#     pip install -r requirements-full.txt
+#
+# On Linux, `pip install pylibseekdb` additionally enables the embedded engine
+# (no server process at all); the backend picks it up automatically.
+
+-r requirements.txt
+
+pyseekdb>=1.4,<2
+PyMySQL>=1.1
+onnxruntime>=1.20
+
+# Optional, Linux only - embedded seekdb without a server:
+# pylibseekdb>=1.4

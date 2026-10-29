@@ -65,15 +65,41 @@ StudyMind 把「知识」和「学习状态」分开存：**seekdb 负责知识�
 
 具体输出见 [`docs/evidence.md`](docs/evidence.md)。
 
-## 快速开始（完整模式：seekdb + PowerContext）
+## 快速开始
 
-### 环境
+项目有两个等价入口（同一份实现，`qoder/backend/app.py`）：
+
+```bash
+python app.py                 # 仓库根目录
+python qoder/backend/app.py   # qoder 目录内
+```
+
+服务默认监听 `0.0.0.0:5000`，同时识别通用的 `PORT` / `HOST` 环境变量，可直接跑在容器里。
+
+### 方式 A：最小运行（不需要 Docker，不需要任何外部服务）
+
+```bash
+pip install -r requirements.txt   # 仓库根目录；只装 Web 层，任何 Python 3.10+ 机器都可安装
+python app.py
+```
+
+打开 http://localhost:5000 即可体验全部页面功能。首次启动会自动写入 5 条示例资料，
+因此不接任何外部服务也能检索、出题、记录进度。此时 `/api/health` 返回
+`mode=degraded`、`seekdb_backend=memory-fallback`，属于如实报告。
+
+> 想在这个模式下也用上真实 seekdb 检索：Linux 上执行
+> `pip install -r qoder/requirements-full.txt && pip install pylibseekdb`，
+> 后端会自动切到嵌入式 seekdb（`seekdb_backend=embedded`），仍然不需要任何服务进程。
+
+### 方式 B：完整模式（真实 seekdb 服务 + PowerContext Server）
+
+#### 环境
 
 - Python 3.10+（验证环境 3.13）
 - Docker（运行 seekdb）
 - Windows 额外需要 [MSVC 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)（onnxruntime 依赖）
 
-### 1. 启动 seekdb
+#### 1. 启动 seekdb
 
 ```bash
 docker run -d --name seekdb -p 2881:2881 \
@@ -82,7 +108,7 @@ docker run -d --name seekdb -p 2881:2881 \
 
 数据库不需要手动建，后端首次启动会自动 `CREATE DATABASE IF NOT EXISTS study_mind`。
 
-### 2. 启动 PowerContext Server
+#### 2. 启动 PowerContext Server
 
 ```bash
 pip install "powercontext[server]==1.4.1"
@@ -92,20 +118,20 @@ powercontext server run --host 127.0.0.1 --port 8848 --role all
 首次运行时后端会自动创建一个学习 Scope，并把 `scope_id` 缓存到 `qoder/.powercontext-scope.json`。
 确认就绪：`curl http://127.0.0.1:8848/health/ready` → `{"status":"ready",...}`
 
-### 3. 启动 StudyMind
+#### 3. 启动 StudyMind
 
 ```bash
-cd qoder
-pip install -r requirements.txt
-cd backend
+pip install -r qoder/requirements-full.txt
+SEEKDB_HOST=127.0.0.1 SEEKDB_PORT=2881 \
+POWERCONTEXT_API_URL=http://127.0.0.1:8848 \
 python app.py
 ```
 
 访问 http://localhost:5000 ，页面右上角状态应显示 **「PowerContext + seekdb 已连接」**。
-`/api/health` 应返回 `mode=full`。
+`/api/health` 应返回 `mode=full`、`seekdb_backend=server`。
 
-> 没有 Docker 也能启动：两个依赖都不可达时后端自动退回内存实现，功能可用，
-> 但 `/api/health` 会显示 `mode=degraded`，此时代谢掉的数据不持久，也不能作为验收依据。
+> 连接顺序是自动判断的：设置了 `SEEKDB_HOST` 就走服务端；不设置则优先嵌入式 seekdb；
+> 都不可用时退回内存实现，服务仍能启动，`/api/health` 会显示 `mode=degraded`。
 
 ### 4. 环境变量（可选）
 

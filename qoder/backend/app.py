@@ -45,6 +45,7 @@ try:
         user=Config.SEEKDB_USER,
         password=Config.SEEKDB_PASSWORD,
         database=Config.SEEKDB_DATABASE,
+        path=Config.SEEKDB_PATH or None,
     )
     if not material_client.health_check():
         logger.warning('seekdb unavailable, using in-memory fallback')
@@ -87,7 +88,7 @@ def health():
         'powercontext': pc_live,
         'seekdb': seekdb_live,
         'mode': 'full' if (seekdb_live and pc_live) else 'degraded',
-        'seekdb_backend': 'seekdb' if seekdb_live else 'memory-fallback',
+        'seekdb_backend': getattr(material_client, 'backend', None) or 'memory-fallback',
         'powercontext_backend': 'powercontext' if pc_live else 'memory-fallback',
         'material_count': material_client.count(),
         'timestamp': datetime.now().isoformat(),
@@ -517,10 +518,27 @@ def load_sample_data():
     })
 
 
+def _ensure_seed_data():
+    """Load the demo materials on first start so the site is never empty.
+
+    Reviewers can also trigger this from the UI (or POST /api/load-samples);
+    doing it at startup just removes one manual step.
+    """
+    try:
+        if material_client.count() > 0:
+            return
+        with app.test_client() as client:
+            client.post('/api/load-samples')
+        logger.info('seeded %s demo materials', material_client.count())
+    except Exception as exc:
+        logger.warning('demo seed skipped: %s', exc)
+
+
 if __name__ == '__main__':
-    logger.info(f'Starting StudyMind backend on {Config.FLASK_HOST}:{Config.FLASK_PORT}')
-    logger.info(f'PowerContext: {Config.POWERCONTEXT_API_URL}')
-    logger.info(f'seekdb: {Config.SEEKDB_HOST}:{Config.SEEKDB_PORT}')
+    logger.info('Starting StudyMind backend on %s:%s', Config.FLASK_HOST, Config.FLASK_PORT)
+    logger.info('PowerContext: %s', Config.POWERCONTEXT_API_URL)
+    logger.info('seekdb: %s', getattr(material_client, 'backend', None) or 'memory-fallback')
+    _ensure_seed_data()
     app.run(
         host=Config.FLASK_HOST,
         port=Config.FLASK_PORT,

@@ -1,25 +1,16 @@
-# StudyMind backend dependencies
-# Python 3.10+ (tested on 3.13)
+# StudyMind backend - minimal runtime dependencies.
+#
+# This set is intentionally small and uses version ranges instead of exact
+# pins: it must install on any Python 3.10+ machine without resolving
+# conflicts, and it is enough to start the service and run the in-memory
+# fallback mode.
+#
+# For the real seekdb path (vector + full-text retrieval), install the
+# optional extras instead:
+#
+#     pip install -r requirements-full.txt
 
-# --- Web API ---
-Flask==3.1.3
-flask-cors==6.0.5
-python-dotenv>=1.0.0
-requests>=2.31.0
-
-# --- seekdb Python SDK ---
-# pyseekdb speaks the MySQL protocol to a seekdb server and ships a local
-# all-MiniLM-L6-v2 ONNX embedding function (384-dim), so no API key is needed.
-pyseekdb==1.4.0.post1
-PyMySQL>=1.1.0
-
-# onnxruntime is pulled in by pyseekdb; pinned here so reviewers get the same
-# runtime that was verified. On Windows it requires the MSVC runtime
-# (vc_redist.x64). If `import onnxruntime` fails with a DLL error, install
-# https://aka.ms/vs/17/release/vc_redist.x64.exe
-onnxruntime>=1.20.0
-
-# --- Optional: LLM answer synthesis ---
-# Only needed if you want /api/ask to call an LLM. The project runs fully
-# without it, using retrieved materials + memories to compose the answer.
-# openai>=1.0.0
+Flask>=3.0,<4
+flask-cors>=4.0,<7
+python-dotenv>=1.0
+requests>=2.28
