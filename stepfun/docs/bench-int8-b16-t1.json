@@ -1,0 +1,681 @@
+{
+  "generatedAt": "2026-10-29T13:10:55.673Z",
+  "base": "http://127.0.0.1:5010",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/131.0.6778.33 Safari/537.36",
+  "rows": [
+    {
+      "device": "wasm",
+      "dtype": "int8",
+      "threads": "1",
+      "phase": "cold",
+      "collection": "bench_wasm_int8_mvtkagh3",
+      "batch": 16,
+      "docs": 40,
+      "modelLoadMs": 487,
+      "modelWarmMs": 15.900000095367432,
+      "downloadedMB": null,
+      "embedDocsMs": 4135,
+      "seekdbWriteMs": 18326,
+      "refreshMs": 649,
+      "importWallMs": 23834,
+      "docsPerSec": 9.67,
+      "queryEmbedMedianMs": 40.05750000476837,
+      "seekdbSearchMedianMs": 85.11250007152557,
+      "e2eMedianMs": 119.82749998569489,
+      "e2eMinMs": 92.86500000953674,
+      "e2eMaxMs": 225.11500000953674,
+      "mode": "hybrid",
+      "topK": 5,
+      "screenshot": "docs\\images\\ui-wasm-int8-b16-cold.png",
+      "rawBench": {
+        "backend": "wasm",
+        "dtype": "int8",
+        "mode": "hybrid",
+        "topK": 5,
+        "collection": "bench_wasm_int8_mvtkagh3",
+        "rounds": 10,
+        "e2eMedian": 119.82749998569489,
+        "e2eMin": 92.86500000953674,
+        "e2eMax": 225.11500000953674,
+        "dbMedian": 85.11250007152557,
+        "queryEmbedMedian": 40.05750000476837,
+        "raw": [
+          {
+            "e2e": 151.75500011444092,
+            "queryEmbedMs": 44.75999999046326,
+            "dbMs": 105.77999997138977,
+            "inDbMs": 101,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 225.11500000953674,
+            "queryEmbedMs": 47.040000200271606,
+            "dbMs": 177.73499989509583,
+            "inDbMs": 169,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 158.18499994277954,
+            "queryEmbedMs": 53.87000012397766,
+            "dbMs": 103.62999987602234,
+            "inDbMs": 65,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 92.86500000953674,
+            "queryEmbedMs": 39.30999994277954,
+            "dbMs": 53.144999980926514,
+            "inDbMs": 49,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 98.49499988555908,
+            "queryEmbedMs": 32.894999980926514,
+            "dbMs": 65.26999998092651,
+            "inDbMs": 52,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 116.95000004768372,
+            "queryEmbedMs": 35.19000005722046,
+            "dbMs": 81.41000008583069,
+            "inDbMs": 71,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 122.70499992370605,
+            "queryEmbedMs": 30.069999933242798,
+            "dbMs": 92.22000002861023,
+            "inDbMs": 87,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 130.23499989509583,
+            "queryEmbedMs": 40.8050000667572,
+            "dbMs": 88.81500005722046,
+            "inDbMs": 82,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 105.27999997138977,
+            "queryEmbedMs": 44.94500017166138,
+            "dbMs": 59.77999997138977,
+            "inDbMs": 53,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 103.43499994277954,
+            "queryEmbedMs": 37.639999866485596,
+            "dbMs": 65.44000005722046,
+            "inDbMs": 55,
+            "mode": "hybrid"
+          }
+        ]
+      },
+      "timings": [
+        {
+          "phase": "model-load",
+          "ms": 487,
+          "note": "INT8 / wasm · 预热 16ms",
+          "at": "2026-10-29T13:11:02.370Z"
+        },
+        {
+          "phase": "embed-docs",
+          "ms": 4135,
+          "note": "40 条 / 9.7 docs/s · batch 16",
+          "at": "2026-10-29T13:11:28.100Z"
+        },
+        {
+          "phase": "seekdb-write",
+          "ms": 18326,
+          "note": "40 条写入（含 HNSW/全文索引增量维护）",
+          "at": "2026-10-29T13:11:28.100Z"
+        },
+        {
+          "phase": "refresh",
+          "ms": 649,
+          "note": "向量探针 visible=true / count=40 / 尝试 1 次",
+          "at": "2026-10-29T13:11:28.100Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 37,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:29.310Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 4246,
+          "note": "hybrid · top5 · 库内 4.24 s",
+          "at": "2026-10-29T13:11:33.559Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 4286,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:33.559Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 43,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:33.603Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 106,
+          "note": "hybrid · top5 · 库内 101 ms",
+          "at": "2026-10-29T13:11:33.710Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 152,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:33.711Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 47,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:33.758Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 178,
+          "note": "hybrid · top5 · 库内 169 ms",
+          "at": "2026-10-29T13:11:33.936Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 225,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:33.937Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 54,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:33.991Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 104,
+          "note": "hybrid · top5 · 库内 65 ms",
+          "at": "2026-10-29T13:11:34.094Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 158,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:34.095Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 39,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:34.134Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 53,
+          "note": "hybrid · top5 · 库内 49 ms",
+          "at": "2026-10-29T13:11:34.188Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 93,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:34.188Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 33,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:34.221Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 65,
+          "note": "hybrid · top5 · 库内 52 ms",
+          "at": "2026-10-29T13:11:34.286Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 98,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:34.287Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 35,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:34.322Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 81,
+          "note": "hybrid · top5 · 库内 71 ms",
+          "at": "2026-10-29T13:11:34.403Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 117,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:34.404Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 30,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:34.433Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 92,
+          "note": "hybrid · top5 · 库内 87 ms",
+          "at": "2026-10-29T13:11:34.526Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 123,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:34.526Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 41,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:34.567Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 89,
+          "note": "hybrid · top5 · 库内 82 ms",
+          "at": "2026-10-29T13:11:34.656Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 130,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:34.657Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 45,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:34.702Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 60,
+          "note": "hybrid · top5 · 库内 53 ms",
+          "at": "2026-10-29T13:11:34.762Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 105,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:34.762Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 38,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:11:34.800Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 65,
+          "note": "hybrid · top5 · 库内 55 ms",
+          "at": "2026-10-29T13:11:34.865Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 103,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:11:34.866Z"
+        }
+      ]
+    },
+    {
+      "device": "wasm",
+      "dtype": "int8",
+      "threads": "1",
+      "phase": "warm",
+      "collection": "bench_wasm_int8_mvtkb89p",
+      "batch": 16,
+      "docs": 40,
+      "modelLoadMs": 1289,
+      "modelWarmMs": 16.630000114440918,
+      "downloadedMB": null,
+      "embedDocsMs": 4534,
+      "seekdbWriteMs": 16450,
+      "refreshMs": 8170,
+      "importWallMs": 36763,
+      "docsPerSec": 8.82,
+      "queryEmbedMedianMs": 34.982499837875366,
+      "seekdbSearchMedianMs": 273.6875001192093,
+      "e2eMedianMs": 308.66999995708466,
+      "e2eMinMs": 173.27499985694885,
+      "e2eMaxMs": 1194.829999923706,
+      "mode": "hybrid",
+      "topK": 5,
+      "screenshot": "docs\\images\\ui-wasm-int8-b16-warm.png",
+      "rawBench": {
+        "backend": "wasm",
+        "dtype": "int8",
+        "mode": "hybrid",
+        "topK": 5,
+        "collection": "bench_wasm_int8_mvtkb89p",
+        "rounds": 10,
+        "e2eMedian": 308.66999995708466,
+        "e2eMin": 173.27499985694885,
+        "e2eMax": 1194.829999923706,
+        "dbMedian": 273.6875001192093,
+        "queryEmbedMedian": 34.982499837875366,
+        "raw": [
+          {
+            "e2e": 815.2300000190735,
+            "queryEmbedMs": 35.67999982833862,
+            "dbMs": 779.1500000953674,
+            "inDbMs": 774,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 354.2900002002716,
+            "queryEmbedMs": 36.295000076293945,
+            "dbMs": 317.69000005722046,
+            "inDbMs": 313,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 309.12999987602234,
+            "queryEmbedMs": 31.289999961853027,
+            "dbMs": 277.49500012397766,
+            "inDbMs": 274,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 173.27499985694885,
+            "queryEmbedMs": 34.22500014305115,
+            "dbMs": 138.75499987602234,
+            "inDbMs": 131,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 653.2850000858307,
+            "queryEmbedMs": 47.88000011444092,
+            "dbMs": 605.0199999809265,
+            "inDbMs": 601,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 308.210000038147,
+            "queryEmbedMs": 37.96499991416931,
+            "dbMs": 269.8800001144409,
+            "inDbMs": 265,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 270.4800000190735,
+            "queryEmbedMs": 30.18999981880188,
+            "dbMs": 239.9800000190735,
+            "inDbMs": 236,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 244.9800000190735,
+            "queryEmbedMs": 34.080000162124634,
+            "dbMs": 210.50999999046326,
+            "inDbMs": 203,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 1194.829999923706,
+            "queryEmbedMs": 34.28499984741211,
+            "dbMs": 931.7350001335144,
+            "inDbMs": 826,
+            "mode": "hybrid"
+          },
+          {
+            "e2e": 218.40000009536743,
+            "queryEmbedMs": 39.36999988555908,
+            "dbMs": 177.92499995231628,
+            "inDbMs": 149,
+            "mode": "hybrid"
+          }
+        ]
+      },
+      "timings": [
+        {
+          "phase": "model-load",
+          "ms": 1370,
+          "note": "INT8 / wasm · 预热 28ms",
+          "at": "2026-10-29T13:11:39.203Z"
+        },
+        {
+          "phase": "model-load",
+          "ms": 1289,
+          "note": "INT8 / wasm · 预热 17ms",
+          "at": "2026-10-29T13:11:39.204Z"
+        },
+        {
+          "phase": "embed-docs",
+          "ms": 4534,
+          "note": "40 条 / 8.8 docs/s · batch 16",
+          "at": "2026-10-29T13:12:19.389Z"
+        },
+        {
+          "phase": "seekdb-write",
+          "ms": 16450,
+          "note": "40 条写入（含 HNSW/全文索引增量维护）",
+          "at": "2026-10-29T13:12:19.389Z"
+        },
+        {
+          "phase": "refresh",
+          "ms": 8170,
+          "note": "向量探针 visible=true / count=40 / 尝试 2 次",
+          "at": "2026-10-29T13:12:19.389Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 41,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:26.958Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 880,
+          "note": "hybrid · top5 · 库内 859 ms",
+          "at": "2026-10-29T13:12:27.837Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 921,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:27.838Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 36,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:27.874Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 779,
+          "note": "hybrid · top5 · 库内 774 ms",
+          "at": "2026-10-29T13:12:28.653Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 815,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:28.653Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 36,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:28.690Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 318,
+          "note": "hybrid · top5 · 库内 313 ms",
+          "at": "2026-10-29T13:12:29.007Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 354,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:29.008Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 31,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:29.039Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 277,
+          "note": "hybrid · top5 · 库内 274 ms",
+          "at": "2026-10-29T13:12:29.317Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 309,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:29.317Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 34,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:29.351Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 139,
+          "note": "hybrid · top5 · 库内 131 ms",
+          "at": "2026-10-29T13:12:29.490Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 173,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:29.490Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 48,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:29.538Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 605,
+          "note": "hybrid · top5 · 库内 601 ms",
+          "at": "2026-10-29T13:12:30.143Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 653,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:30.144Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 38,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:30.182Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 270,
+          "note": "hybrid · top5 · 库内 265 ms",
+          "at": "2026-10-29T13:12:30.452Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 308,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:30.452Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 30,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:30.482Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 240,
+          "note": "hybrid · top5 · 库内 236 ms",
+          "at": "2026-10-29T13:12:30.722Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 270,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:30.723Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 34,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:30.757Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 211,
+          "note": "hybrid · top5 · 库内 203 ms",
+          "at": "2026-10-29T13:12:30.967Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 245,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:30.968Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 34,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:31.002Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 932,
+          "note": "hybrid · top5 · 库内 826 ms",
+          "at": "2026-10-29T13:12:31.934Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 1195,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:32.163Z"
+        },
+        {
+          "phase": "query-embed",
+          "ms": 39,
+          "note": "INT8 / WASM · 1 条",
+          "at": "2026-10-29T13:12:32.202Z"
+        },
+        {
+          "phase": "seekdb-search",
+          "ms": 178,
+          "note": "hybrid · top5 · 库内 149 ms",
+          "at": "2026-10-29T13:12:32.380Z"
+        },
+        {
+          "phase": "e2e",
+          "ms": 218,
+          "note": "WASM / INT8 / hybrid",
+          "at": "2026-10-29T13:12:32.381Z"
+        }
+      ]
+    }
+  ]
+}

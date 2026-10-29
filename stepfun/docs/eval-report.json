@@ -1,0 +1,1009 @@
+{
+  "generatedAt": "2026-10-29T13:01:19.619Z",
+  "base": "http://127.0.0.1:5010",
+  "topK": 5,
+  "corpusSize": 40,
+  "queries": 18,
+  "runs": [
+    {
+      "dtype": "int8",
+      "device": "wasm",
+      "loadMs": 3271.6500000953674,
+      "embedDocsMs": 10461,
+      "docsPerSec": 3.82,
+      "perDocMs": 261.51,
+      "metrics": {
+        "hybrid": {
+          "recall5": 1,
+          "ndcg5": 1,
+          "mrr5": 1,
+          "missed": []
+        },
+        "vector": {
+          "recall5": 1,
+          "ndcg5": 1,
+          "mrr5": 1,
+          "missed": []
+        }
+      },
+      "details_hybrid": [
+        {
+          "query": "seekdb 支持哪些向量距离度量",
+          "ids": [
+            "doc-02",
+            "doc-01",
+            "doc-06",
+            "doc-26",
+            "doc-15"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "中文全文索引用什么分词器",
+          "ids": [
+            "doc-03",
+            "doc-38",
+            "doc-28",
+            "doc-36",
+            "doc-11"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "在数据库内部完成向量和全文融合排序的存储过程",
+          "ids": [
+            "doc-04",
+            "doc-23",
+            "doc-36",
+            "doc-26",
+            "doc-28"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "RRF 里的 k 一般取多少",
+          "ids": [
+            "doc-05",
+            "doc-29",
+            "doc-26",
+            "doc-30",
+            "doc-04"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "seekdb-js 提供哪些读写方法",
+          "ids": [
+            "doc-06",
+            "doc-02",
+            "doc-01",
+            "doc-04",
+            "doc-07"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "WebGPU 在 Chrome 什么时候默认开启",
+          "ids": [
+            "doc-10",
+            "doc-31",
+            "doc-32",
+            "doc-04",
+            "doc-11"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "WASM 多线程需要什么条件",
+          "ids": [
+            "doc-12",
+            "doc-10",
+            "doc-26",
+            "doc-08",
+            "doc-05"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "动态量化需要校准数据集吗",
+          "ids": [
+            "doc-13",
+            "doc-15",
+            "doc-35",
+            "doc-23",
+            "doc-07"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "bge-small-zh 输出多少维向量",
+          "ids": [
+            "doc-16",
+            "doc-37",
+            "doc-15",
+            "doc-26",
+            "doc-02"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "查询侧要不要加指令前缀",
+          "ids": [
+            "doc-17",
+            "doc-28",
+            "doc-08",
+            "doc-29",
+            "doc-30"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "batch size 取多大比较合适",
+          "ids": [
+            "doc-19",
+            "doc-13",
+            "doc-16",
+            "doc-26",
+            "doc-05"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "第二次打开页面还要重新下载模型吗",
+          "ids": [
+            "doc-20",
+            "doc-17",
+            "doc-12",
+            "doc-08",
+            "doc-11"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "端到端查询延迟由哪几段组成",
+          "ids": [
+            "doc-22",
+            "doc-27",
+            "doc-17",
+            "doc-30",
+            "doc-40"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "HNSW 的 ef_search 影响什么",
+          "ids": [
+            "doc-27",
+            "doc-04",
+            "doc-08",
+            "doc-15",
+            "doc-06"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "Recall@K 和 nDCG@K 有什么区别",
+          "ids": [
+            "doc-29",
+            "doc-12",
+            "doc-08",
+            "doc-15",
+            "doc-16"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "图片知识库怎么做",
+          "ids": [
+            "doc-36",
+            "doc-28",
+            "doc-34",
+            "doc-25",
+            "doc-23"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "批量导入的刷新策略怎么选",
+          "ids": [
+            "doc-09",
+            "doc-08",
+            "doc-35",
+            "doc-25",
+            "doc-19"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "为什么不许调用云端 embedding API",
+          "ids": [
+            "doc-24",
+            "doc-15",
+            "doc-04",
+            "doc-23",
+            "doc-07"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        }
+      ],
+      "details_vector": [
+        {
+          "query": "seekdb 支持哪些向量距离度量",
+          "ids": [
+            "doc-02",
+            "doc-01",
+            "doc-26",
+            "doc-06",
+            "doc-15"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "中文全文索引用什么分词器",
+          "ids": [
+            "doc-03",
+            "doc-28",
+            "doc-38",
+            "doc-17",
+            "doc-36"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "在数据库内部完成向量和全文融合排序的存储过程",
+          "ids": [
+            "doc-04",
+            "doc-36",
+            "doc-28",
+            "doc-26",
+            "doc-23"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "RRF 里的 k 一般取多少",
+          "ids": [
+            "doc-05",
+            "doc-26",
+            "doc-14",
+            "doc-19",
+            "doc-29"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "seekdb-js 提供哪些读写方法",
+          "ids": [
+            "doc-06",
+            "doc-04",
+            "doc-02",
+            "doc-07",
+            "doc-01"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "WebGPU 在 Chrome 什么时候默认开启",
+          "ids": [
+            "doc-10",
+            "doc-32",
+            "doc-31",
+            "doc-04",
+            "doc-38"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "WASM 多线程需要什么条件",
+          "ids": [
+            "doc-12",
+            "doc-05",
+            "doc-10",
+            "doc-26",
+            "doc-08"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "动态量化需要校准数据集吗",
+          "ids": [
+            "doc-13",
+            "doc-15",
+            "doc-35",
+            "doc-07",
+            "doc-23"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "bge-small-zh 输出多少维向量",
+          "ids": [
+            "doc-16",
+            "doc-26",
+            "doc-37",
+            "doc-02",
+            "doc-15"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "查询侧要不要加指令前缀",
+          "ids": [
+            "doc-17",
+            "doc-08",
+            "doc-28",
+            "doc-29",
+            "doc-24"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "batch size 取多大比较合适",
+          "ids": [
+            "doc-19",
+            "doc-26",
+            "doc-13",
+            "doc-16",
+            "doc-05"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "第二次打开页面还要重新下载模型吗",
+          "ids": [
+            "doc-20",
+            "doc-17",
+            "doc-08",
+            "doc-09",
+            "doc-23"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "端到端查询延迟由哪几段组成",
+          "ids": [
+            "doc-22",
+            "doc-27",
+            "doc-17",
+            "doc-40",
+            "doc-24"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "HNSW 的 ef_search 影响什么",
+          "ids": [
+            "doc-27",
+            "doc-15",
+            "doc-28",
+            "doc-04",
+            "doc-08"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "Recall@K 和 nDCG@K 有什么区别",
+          "ids": [
+            "doc-29",
+            "doc-08",
+            "doc-27",
+            "doc-17",
+            "doc-12"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "图片知识库怎么做",
+          "ids": [
+            "doc-36",
+            "doc-25",
+            "doc-34",
+            "doc-28",
+            "doc-40"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "批量导入的刷新策略怎么选",
+          "ids": [
+            "doc-09",
+            "doc-08",
+            "doc-35",
+            "doc-25",
+            "doc-19"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "为什么不许调用云端 embedding API",
+          "ids": [
+            "doc-24",
+            "doc-23",
+            "doc-33",
+            "doc-04",
+            "doc-15"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        }
+      ],
+      "delta": {
+        "hybrid": {
+          "recall5": 0,
+          "ndcg5": 0,
+          "mrr5": 0
+        },
+        "vector": {
+          "recall5": 0,
+          "ndcg5": 0,
+          "mrr5": 0
+        }
+      }
+    },
+    {
+      "dtype": "fp32",
+      "device": "wasm",
+      "loadMs": 3267.1150000095367,
+      "embedDocsMs": 9821,
+      "docsPerSec": 4.07,
+      "perDocMs": 245.52,
+      "metrics": {
+        "hybrid": {
+          "recall5": 1,
+          "ndcg5": 1,
+          "mrr5": 1,
+          "missed": []
+        },
+        "vector": {
+          "recall5": 1,
+          "ndcg5": 1,
+          "mrr5": 1,
+          "missed": []
+        }
+      },
+      "details_hybrid": [
+        {
+          "query": "seekdb 支持哪些向量距离度量",
+          "ids": [
+            "doc-02",
+            "doc-01",
+            "doc-06",
+            "doc-26",
+            "doc-15"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "中文全文索引用什么分词器",
+          "ids": [
+            "doc-03",
+            "doc-38",
+            "doc-28",
+            "doc-11",
+            "doc-16"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "在数据库内部完成向量和全文融合排序的存储过程",
+          "ids": [
+            "doc-04",
+            "doc-36",
+            "doc-28",
+            "doc-26",
+            "doc-07"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "RRF 里的 k 一般取多少",
+          "ids": [
+            "doc-05",
+            "doc-29",
+            "doc-26",
+            "doc-30",
+            "doc-04"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "seekdb-js 提供哪些读写方法",
+          "ids": [
+            "doc-06",
+            "doc-01",
+            "doc-04",
+            "doc-03",
+            "doc-07"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "WebGPU 在 Chrome 什么时候默认开启",
+          "ids": [
+            "doc-10",
+            "doc-31",
+            "doc-32",
+            "doc-04",
+            "doc-03"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "WASM 多线程需要什么条件",
+          "ids": [
+            "doc-12",
+            "doc-10",
+            "doc-26",
+            "doc-05",
+            "doc-38"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "动态量化需要校准数据集吗",
+          "ids": [
+            "doc-13",
+            "doc-35",
+            "doc-15",
+            "doc-23",
+            "doc-07"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "bge-small-zh 输出多少维向量",
+          "ids": [
+            "doc-16",
+            "doc-37",
+            "doc-15",
+            "doc-26",
+            "doc-02"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "查询侧要不要加指令前缀",
+          "ids": [
+            "doc-17",
+            "doc-28",
+            "doc-08",
+            "doc-29",
+            "doc-30"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "batch size 取多大比较合适",
+          "ids": [
+            "doc-19",
+            "doc-13",
+            "doc-16",
+            "doc-26",
+            "doc-05"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "第二次打开页面还要重新下载模型吗",
+          "ids": [
+            "doc-20",
+            "doc-17",
+            "doc-12",
+            "doc-08",
+            "doc-11"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "端到端查询延迟由哪几段组成",
+          "ids": [
+            "doc-22",
+            "doc-27",
+            "doc-17",
+            "doc-30",
+            "doc-40"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "HNSW 的 ef_search 影响什么",
+          "ids": [
+            "doc-27",
+            "doc-04",
+            "doc-15",
+            "doc-06",
+            "doc-28"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "Recall@K 和 nDCG@K 有什么区别",
+          "ids": [
+            "doc-29",
+            "doc-15",
+            "doc-27",
+            "doc-08",
+            "doc-16"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "图片知识库怎么做",
+          "ids": [
+            "doc-36",
+            "doc-34",
+            "doc-28",
+            "doc-25",
+            "doc-23"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "批量导入的刷新策略怎么选",
+          "ids": [
+            "doc-09",
+            "doc-08",
+            "doc-35",
+            "doc-25",
+            "doc-19"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "为什么不许调用云端 embedding API",
+          "ids": [
+            "doc-24",
+            "doc-15",
+            "doc-04",
+            "doc-23",
+            "doc-07"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        }
+      ],
+      "details_vector": [
+        {
+          "query": "seekdb 支持哪些向量距离度量",
+          "ids": [
+            "doc-02",
+            "doc-01",
+            "doc-26",
+            "doc-15",
+            "doc-06"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "中文全文索引用什么分词器",
+          "ids": [
+            "doc-03",
+            "doc-28",
+            "doc-38",
+            "doc-17",
+            "doc-40"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "在数据库内部完成向量和全文融合排序的存储过程",
+          "ids": [
+            "doc-04",
+            "doc-36",
+            "doc-28",
+            "doc-07",
+            "doc-26"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "RRF 里的 k 一般取多少",
+          "ids": [
+            "doc-05",
+            "doc-26",
+            "doc-19",
+            "doc-29",
+            "doc-28"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "seekdb-js 提供哪些读写方法",
+          "ids": [
+            "doc-06",
+            "doc-04",
+            "doc-07",
+            "doc-01",
+            "doc-03"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "WebGPU 在 Chrome 什么时候默认开启",
+          "ids": [
+            "doc-10",
+            "doc-31",
+            "doc-32",
+            "doc-03",
+            "doc-04"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "WASM 多线程需要什么条件",
+          "ids": [
+            "doc-12",
+            "doc-05",
+            "doc-26",
+            "doc-10",
+            "doc-27"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "动态量化需要校准数据集吗",
+          "ids": [
+            "doc-13",
+            "doc-35",
+            "doc-07",
+            "doc-15",
+            "doc-23"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "bge-small-zh 输出多少维向量",
+          "ids": [
+            "doc-16",
+            "doc-26",
+            "doc-37",
+            "doc-02",
+            "doc-15"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "查询侧要不要加指令前缀",
+          "ids": [
+            "doc-17",
+            "doc-08",
+            "doc-28",
+            "doc-29",
+            "doc-24"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "batch size 取多大比较合适",
+          "ids": [
+            "doc-19",
+            "doc-13",
+            "doc-26",
+            "doc-16",
+            "doc-05"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "第二次打开页面还要重新下载模型吗",
+          "ids": [
+            "doc-20",
+            "doc-17",
+            "doc-08",
+            "doc-09",
+            "doc-23"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "端到端查询延迟由哪几段组成",
+          "ids": [
+            "doc-22",
+            "doc-27",
+            "doc-40",
+            "doc-17",
+            "doc-24"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "HNSW 的 ef_search 影响什么",
+          "ids": [
+            "doc-27",
+            "doc-15",
+            "doc-28",
+            "doc-17",
+            "doc-04"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "Recall@K 和 nDCG@K 有什么区别",
+          "ids": [
+            "doc-29",
+            "doc-27",
+            "doc-08",
+            "doc-17",
+            "doc-15"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "图片知识库怎么做",
+          "ids": [
+            "doc-36",
+            "doc-25",
+            "doc-34",
+            "doc-40",
+            "doc-28"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "批量导入的刷新策略怎么选",
+          "ids": [
+            "doc-09",
+            "doc-08",
+            "doc-35",
+            "doc-25",
+            "doc-19"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        },
+        {
+          "query": "为什么不许调用云端 embedding API",
+          "ids": [
+            "doc-24",
+            "doc-23",
+            "doc-04",
+            "doc-33",
+            "doc-15"
+          ],
+          "recall": 1,
+          "ndcg": 1,
+          "mrr": 1
+        }
+      ]
+    }
+  ]
+}

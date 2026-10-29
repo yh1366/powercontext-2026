@@ -1,0 +1,97 @@
+{
+  "generatedAt": "2026-10-29T13:05:18.995Z",
+  "base": "http://127.0.0.1:5010",
+  "backend": {
+    "device": "wasm",
+    "dtype": "int8",
+    "chip": "推理后端 · WASM（已降级：requestAdapter() 返回 null（无可用 GPU 适配器））",
+    "isolated": true
+  },
+  "results": [
+    {
+      "name": "seekdb 连接可用",
+      "ok": true,
+      "detail": "version=5.7.25-OceanBase seekdb-v1.4.0.0"
+    },
+    {
+      "name": "推理后端已确定并在界面提示",
+      "ok": true,
+      "detail": "推理后端 · WASM（已降级：requestAdapter() 返回 null（无可用 GPU 适配器））"
+    },
+    {
+      "name": "cross-origin isolation（WASM 多线程前提）",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "库内表含向量索引（HNSW）",
+      "ok": true,
+      "detail": "CREATE TABLE `c$v2$58545695d39911f198566ebdb9adb3c4` ( `_id` varbinary(512) NOT NULL, `document` string DEFAULT NULL, `e"
+    },
+    {
+      "name": "库内表含全文索引",
+      "ok": true,
+      "detail": "PRIMARY,idx_fts,idx_vec"
+    },
+    {
+      "name": "写入 seekdb 后条数正确",
+      "ok": true,
+      "detail": "total=3"
+    },
+    {
+      "name": "混合检索返回排序结果",
+      "ok": true,
+      "detail": "top1=f2"
+    },
+    {
+      "name": "结果由 seekdb 库内融合（单条 SQL 同时含全文 _fts 与向量 _vs 子查询）",
+      "ok": true,
+      "detail": "SELECT ifnull(`_fts`.`_id`, `_vs`.`_id`) as `_id`, ifnull(`_fts`.`document`, `_vs`.`document`) as `document`, "
+    },
+    {
+      "name": "混合检索 SQL 由 DBMS_HYBRID_SEARCH 生成",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "纯向量检索可用",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "纯全文检索可用",
+      "ok": true,
+      "detail": "top1=f2"
+    },
+    {
+      "name": "切换集合后结果只来自当前集合",
+      "ok": true,
+      "detail": "B 命中 0"
+    },
+    {
+      "name": "增量写入后刷新自检可检索到新文档",
+      "ok": true,
+      "detail": "count=4"
+    },
+    {
+      "name": "上传 .md 文件可切片导入",
+      "ok": true,
+      "detail": "完成：1 条，向量化 213 ms，写入 1.45 s，自检 可见"
+    },
+    {
+      "name": "刷新后集合列表持久化",
+      "ok": true,
+      "detail": "func_b_mvtk2nz2,func_a_mvtk2nz2,kb_1029_oeoua1o7"
+    },
+    {
+      "name": "页面无 JS 异常",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "运行期间无外部网络请求（无云端推理）",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

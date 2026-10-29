@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Edge KB · 端侧向量化 + seekdb 混合检索</title>
+<link rel="stylesheet" href="/styles.css" />
+<!-- Transformers.js 的浏览器构建以裸模块名引用 ONNX Runtime，这里映射到自托管的 ORT 产物（不访问任何 CDN）。 -->
+<script type="importmap">
+{
+  "imports": {
+    "onnxruntime-web": "/vendor/ort/ort.webgpu.bundle.min.mjs",
+    "onnxruntime-common": "/vendor/ort/ort.webgpu.bundle.min.mjs"
+  }
+}
+</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">EK</div>
+    <div>
+      <h1>Edge KB · 迷你知识库</h1>
+      <p class="sub">浏览器本地向量化 · seekdb 库内混合检索 · 无云端推理</p>
+    </div>
+  </div>
+  <div class="chips">
+    <span id="chip-seekdb" class="chip chip-mute" title="seekdb 连接状态">seekdb · 连接中</span>
+    <span id="chip-backend" class="chip chip-mute" title="推理后端">推理后端 · 检测中</span>
+    <span id="chip-model" class="chip chip-mute" title="模型与精度">模型 · —</span>
+  </div>
+</header>
+
+<div id="banner" class="banner hidden"></div>
+
+<main class="grid">
+  <section class="panel">
+    <h2><span class="step">1</span>知识库集合</h2>
+    <div class="field">
+      <label>当前集合</label>
+      <select id="kb-select"><option value="">（未连接）</option></select>
+    </div>
+    <div class="row">
+      <input id="kb-name" placeholder="新集合名，如 kb_demo" />
+      <button id="btn-create" class="btn">新建</button>
+    </div>
+    <div class="row">
+      <button id="btn-drop" class="btn btn-ghost">删除当前集合</button>
+      <button id="btn-schema" class="btn btn-ghost">查看库内表结构</button>
+    </div>
+
+    <h2><span class="step">2</span>导入语料</h2>
+    <label class="dropzone" id="dropzone">
+      <input type="file" id="file-input" multiple accept=".txt,.md,.markdown,text/plain" hidden />
+      <strong>选择或拖入 .txt / .md</strong>
+      <span>文档会在本机浏览器内切片并向量化</span>
+    </label>
+    <div class="row">
+      <button id="btn-sample" class="btn btn-primary">导入示例语料（40 篇）</button>
+      <button id="btn-refresh" class="btn btn-ghost">索引刷新 / 自检</button>
+    </div>
+    <div class="field">
+      <label>批大小 <span id="batch-label">16</span>（embedding batching）</label>
+      <input type="range" id="batch-size" min="1" max="32" step="1" value="16" />
+    </div>
+    <div class="progress">
+      <div class="bar"><i id="bar-fill"></i></div>
+      <div class="progress-text" id="progress-text">空闲</div>
+    </div>
+    <div class="mini" id="kb-stats"></div>
+  </section>
+
+  <section class="panel panel-wide">
+    <h2><span class="step">3</span>检索</h2>
+    <div class="row">
+      <input id="query" placeholder="例如：中文全文索引怎么分词？RRF 是怎么融合的？" />
+      <button id="btn-search" class="btn btn-primary">检索</button>
+    </div>
+    <div class="row row-tight">
+      <select id="mode">
+        <option value="hybrid">混合检索（向量 + 全文，库内 RRF）</option>
+        <option value="vector">纯向量（HNSW）</option>
+        <option value="fulltext">纯全文（ngram2）</option>
+      </select>
+      <select id="topk"><option>3</option><option selected>5</option><option>10</option></select>
+      <label class="check"><input type="checkbox" id="explain" /> 显示库内生成的 SQL</label>
+    </div>
+    <div id="results" class="results">
+      <div class="empty">导入语料后即可检索；结果按 seekdb 返回的融合分数排序。</div>
+    </div>
+    <details id="sql-box" class="sql hidden">
+      <summary>seekdb 实际执行的混合检索 SQL</summary>
+      <pre id="sql-text"></pre>
+    </details>
+  </section>
+
+  <aside class="panel">
+    <h2><span class="step">4</span>性能面板</h2>
+    <div class="field">
+      <label>推理后端</label>
+      <select id="device-mode">
+        <option value="auto">自动（优先 WebGPU，不支持则降级 WASM）</option>
+        <option value="wasm">强制 WASM（验证降级路径）</option>
+        <option value="webgpu">强制 WebGPU</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>模型精度</label>
+      <select id="dtype-mode">
+        <option value="int8">INT8（默认，动态量化）</option>
+        <option value="fp16">FP16（需先下载 fp16 权重）</option>
+        <option value="fp32">FP32（基线，需先下载原始权重）</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>WASM 线程数（改动后自动重载模型）</label>
+      <select id="threads-mode">
+        <option value="auto">自动（CPU 核数，上限 4）</option>
+        <option value="1">1（单线程）</option>
+        <option value="2">2</option>
+        <option value="4">4</option>
+      </select>
+    </div>
+    <div class="row">
+      <button id="btn-load-model" class="btn">加载 / 重载模型</button>
+      <button id="btn-bench" class="btn btn-ghost">跑 10 次查询</button>
+    </div>
+    <table class="perf" id="perf-table">
+      <thead><tr><th>阶段</th><th>耗时</th><th>备注</th></tr></thead>
+      <tbody>
+        <tr data-k="model-load"><td>模型加载</td><td>—</td><td>—</td></tr>
+        <tr data-k="embed-docs"><td>文档向量化</td><td>—</td><td>—</td></tr>
+        <tr data-k="seekdb-write"><td>写入 + 索引</td><td>—</td><td>—</td></tr>
+        <tr data-k="refresh"><td>刷新 / 自检</td><td>—</td><td>—</td></tr>
+        <tr data-k="query-embed"><td>查询向量化</td><td>—</td><td>—</td></tr>
+        <tr data-k="seekdb-search"><td>seekdb 检索</td><td>—</td><td>—</td></tr>
+        <tr data-k="e2e"><td>端到端延迟</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <div class="mini" id="bench-out"></div>
+    <details class="logbox">
+      <summary>计时日志（可复制进技术说明）</summary>
+      <pre id="log"></pre>
+    </details>
+  </aside>
+</main>
+
+<footer class="foot">
+  <span>推理位置：本机浏览器（ONNX Runtime Web）</span>
+  <span>存储与检索：seekdb（DBMS_HYBRID_SEARCH + HNSW + ngram2 全文索引）</span>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

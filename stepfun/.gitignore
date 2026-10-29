@@ -1,0 +1,13 @@
+node_modules/
+npm-debug.log*
+.DS_Store
+tools/.cache/
+tools/quantize-report.json
+web/models/
+# 模型权重：只提交 INT8（约 24MB），FP32/FP16 由 tools/fetch_model.sh 下载
+models/**/model.onnx
+models/**/model_fp16.onnx
+models/**/model_fp32.onnx
+!models/**/model_int8.onnx
+screenshots/
+*.log

@@ -1,0 +1,24 @@
+{
+  "note": "检索质量评测集：18 条查询，相关文档为人工标注（基于 data/corpus.json 的 40 篇语料）。指标：Recall@5 / nDCG@5 / MRR@5。",
+  "topK": 5,
+  "queries": [
+    { "q": "seekdb 支持哪些向量距离度量", "relevant": ["doc-02"] },
+    { "q": "中文全文索引用什么分词器", "relevant": ["doc-03"] },
+    { "q": "在数据库内部完成向量和全文融合排序的存储过程", "relevant": ["doc-04"] },
+    { "q": "RRF 里的 k 一般取多少", "relevant": ["doc-05"] },
+    { "q": "seekdb-js 提供哪些读写方法", "relevant": ["doc-06"] },
+    { "q": "WebGPU 在 Chrome 什么时候默认开启", "relevant": ["doc-10"] },
+    { "q": "WASM 多线程需要什么条件", "relevant": ["doc-12"] },
+    { "q": "动态量化需要校准数据集吗", "relevant": ["doc-13"] },
+    { "q": "bge-small-zh 输出多少维向量", "relevant": ["doc-16"] },
+    { "q": "查询侧要不要加指令前缀", "relevant": ["doc-17"] },
+    { "q": "batch size 取多大比较合适", "relevant": ["doc-19"] },
+    { "q": "第二次打开页面还要重新下载模型吗", "relevant": ["doc-20"] },
+    { "q": "端到端查询延迟由哪几段组成", "relevant": ["doc-22"] },
+    { "q": "HNSW 的 ef_search 影响什么", "relevant": ["doc-27"] },
+    { "q": "Recall@K 和 nDCG@K 有什么区别", "relevant": ["doc-29"] },
+    { "q": "图片知识库怎么做", "relevant": ["doc-36"] },
+    { "q": "批量导入的刷新策略怎么选", "relevant": ["doc-09"] },
+    { "q": "为什么不许调用云端 embedding API", "relevant": ["doc-24"] }
+  ]
+}
