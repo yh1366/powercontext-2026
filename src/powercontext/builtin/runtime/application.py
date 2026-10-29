@@ -837,12 +837,6 @@ class ScopedContextApplication:
     def __init__(self, runtime: BuiltinRuntime, scope_id: str) -> None:
         self._runtime = runtime
         self.scope_id = validate_scope_id(scope_id)
-        # Per-scope Memory pooling for the incremental pack. The delta protocol only
-        # reuses the base pack's leading chunks, so a sliding recall window would move
-        # the first changed chunk into the middle of every body and force a full
-        # resend each round. Pooling keeps the rendered candidate set append-only.
-        self._memory_pool: dict[str, dict[str, MemoryHit]] = {}
-        self._memory_first_seen: dict[str, dict[str, int]] = {}
 
     def _merge_memory_candidates(
         self,
@@ -859,8 +853,7 @@ class ScopedContextApplication:
 
         merged: list[PreparedMemoryCandidates] = []
         for group in candidates:
-            pool = self._memory_pool.setdefault(group.scope_id, {})
-            first_seen = self._memory_first_seen.setdefault(group.scope_id, {})
+            pool, first_seen = self._runtime._context_memory_pool(group.scope_id)
             for hit in group.hits:
                 if hit.entry_id not in first_seen:
                     first_seen[hit.entry_id] = len(first_seen)
@@ -3205,6 +3198,22 @@ class BuiltinRuntime:
         self.experience_processor = (
             None if scope_ids is None or experience_incubator is None else ScheduledExperienceProcessor(self, scope_ids)
         )
+        # Incremental-pack Memory pooling (per scope). The delta protocol reuses only the
+        # leading chunks of the base pack, so the rendered Memory set has to stay
+        # append-only across rounds. `context.for_scope()` hands out a fresh scoped
+        # application per call, so this state has to hang off the Runtime or the pool
+        # would be empty on every round and the body would churn again.
+        self._context_memory_pools: dict[str, dict[str, MemoryHit]] = {}
+        self._context_memory_order: dict[str, dict[str, int]] = {}
+
+    def _context_memory_pool(self, scope_id: str) -> tuple[dict[str, MemoryHit], dict[str, int]]:
+        """Return the memo of Memory hits ever recalled in one scope, plus their order."""
+
+        pool = self._context_memory_pools.get(scope_id)
+        if pool is None:
+            pool = self._context_memory_pools[scope_id] = {}
+            self._context_memory_order[scope_id] = {}
+        return pool, self._context_memory_order[scope_id]
 
     async def __aenter__(self) -> BuiltinRuntime:
         return self
