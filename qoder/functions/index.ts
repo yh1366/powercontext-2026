@@ -72,7 +72,7 @@ async function recallMemories(query: string, family?: string, limit = 10): Promi
       if (Array.isArray(arr) && arr.length > 0) return arr;
     }
   } catch { /* fallback */ }
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const words = tokenize(query);
   let items = family ? memStore.filter(m => m.family === family) : [...memStore];
   return items.map(m => ({
     s: words.reduce((a, w) => a + (m.content.toLowerCase().includes(w) ? 1 : 0), 0), m
@@ -128,8 +128,24 @@ function addMaterial(title: string, content: string, subject: string, topic: str
   return mat;
 }
 
+// Chinese-aware tokenizer: CJK runs longer than 2 chars are split into
+// overlapping bigrams so partial phrases (e.g. "推导式" inside
+// "列表推导式") still match. Mirrors qoder/backend/seekdb_client.py.
+function tokenize(q: string): string[] {
+  const raw = q.toLowerCase().split(/[\s,，、。；;？?！!]+/).filter(Boolean);
+  const tokens: string[] = [];
+  for (const w of raw) {
+    if (/[\u4e00-\u9fff]/.test(w) && w.length > 2) {
+      for (let i = 0; i + 2 <= w.length; i++) tokens.push(w.slice(i, i + 2));
+    } else if (w) {
+      tokens.push(w);
+    }
+  }
+  return tokens;
+}
+
 function searchMaterials(query: string, subject?: string, limit = 5): Array<{ content: string; metadata: Record<string, unknown>; score: number }> {
-  const tokens = query.toLowerCase().split(/[\s,，、。]+/).filter(Boolean);
+  const tokens = tokenize(query);
   let items = subject ? matStore.filter(m => m.subject === subject) : [...matStore];
   return items.map(m => {
     const text = `${m.title} ${m.content} ${m.subject} ${m.topic}`.toLowerCase();
@@ -139,7 +155,8 @@ function searchMaterials(query: string, subject?: string, limit = 5): Array<{ co
     .map(x => ({
       content: x.item.content,
       metadata: { title: x.item.title, subject: x.item.subject, topic: x.item.topic, type: x.item.type, tags: x.item.tags },
-      score: 1 - x.score / (tokens.length + 1)
+      // Higher = more relevant, same convention as the Flask backend.
+      score: tokens.length ? Math.round((x.score / tokens.length) * 10000) / 10000 : 0
     }));
 }
 
@@ -173,23 +190,42 @@ async function handler(request: Request): Promise<Response> {
     }
 
     if (path === "/health" && method === "GET") {
-      // Edge runtime cannot reach a local seekdb (MySQL protocol) or a local
-      // PowerContext server, so this deployment runs in demo mode. Report the
-      // real state instead of pretending both stores are connected.
+      // Report only what is actually reachable from this edge runtime.
+      // - PowerContext: probe its ready endpoint directly.
+      // - seekdb speaks the MySQL protocol, which edge functions cannot speak,
+      //   so it counts as live only when an HTTP backend bridge reports it.
+      // Never hardcode a connected/integrated state.
       let pcLive = false;
       try {
         const r = await timedFetch(`${PC_BASE}/health/ready`);
         pcLive = !!(r && r.ok);
       } catch { pcLive = false; }
+
+      let seekdbLive = false;
+      let seekdbBackend = "memory-fallback";
+      const backendUrl = getEnv("BACKEND_API_URL", "").replace(/\/+$/, "");
+      if (backendUrl) {
+        try {
+          const r = await timedFetch(`${backendUrl}/api/health`);
+          if (r && r.ok) {
+            const d = await r.json().catch(() => ({} as Record<string, unknown>));
+            seekdbLive = (d as Record<string, unknown>).seekdb === true;
+            seekdbBackend = String((d as Record<string, unknown>).seekdb_backend || "remote-backend");
+          }
+        } catch { /* backend unreachable -> keep real state */ }
+      }
+
       return ok({
         status: "ok",
         powercontext: pcLive,
-        seekdb: false,
-        mode: "degraded",
-        seekdb_backend: "memory-fallback",
+        seekdb: seekdbLive,
+        mode: pcLive && seekdbLive ? "full" : "degraded",
+        seekdb_backend: seekdbBackend,
         powercontext_backend: pcLive ? "powercontext" : "memory-fallback",
         material_count: matStore.length,
-        note: "Qoder Sites demo mode: data lives in edge-function memory. Run qoder/backend locally for the real seekdb + PowerContext path.",
+        note: backendUrl
+          ? "Probing BACKEND_API_URL for the real seekdb / PowerContext state."
+          : "Qoder Sites edge runtime: data lives in function memory. Set BACKEND_API_URL to bridge a real backend, or run qoder/backend locally.",
         timestamp: new Date().toISOString(),
       });
     }

@@ -1,6 +1,7 @@
-// Qoder Sites 上后端挂在 Edge Function 路径下；本地 Flask 后端使用 /api 前缀
+// Qoder Sites 上后端挂在 Edge Function 路径下；本地 Flask 后端使用 /api 前缀。
+// 按 window.location 判断：本机（localhost/127.0.0.1/[::1]）走 /api，其余（function 环境）走边缘函数。
 const API_BASE = window.STUDYMIND_API_BASE || (
-    ['5000', '8000'].includes(window.location.port)
+    ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)
         ? window.location.origin + '/api'
         : window.location.origin + '/functions/v1/app'
 );
@@ -148,7 +149,7 @@ async function performSearch() {
                         ${r.metadata?.type ? `<span class="meta-tag">${r.metadata.type}</span>` : ''}
                     </div>
                     <div class="result-content">${escapeHtml(r.content || '')}</div>
-                    ${r.score != null ? `<div class="result-score">相关度: ${(1 - r.score).toFixed(4)}</div>` : ''}
+                    ${r.score != null ? `<div class="result-score">相关度: ${Number(r.score).toFixed(4)}</div>` : ''}
                 </div>
             `).join('');
         } else {
@@ -229,7 +230,8 @@ async function loadProgressSummary() {
                 const content = m.content || '';
                 const progressMatch = content.match(/(\d+)%/);
                 const percent = progressMatch ? parseInt(progressMatch[1]) : null;
-                const labelMatch = content.match(/Progress: (.+?) =/) || content.match(/Weak point: (.+?) -/);
+                const labelMatch = content.match(/Progress: (.+?) =/) || content.match(/Weak point: (.+?) -/)
+                    || content.match(/学习进度 \| (.+?) \|/) || content.match(/薄弱知识点 \| (.+?) \|/);
                 const label = labelMatch ? labelMatch[1] : content.substring(0, 60);
 
                 return `
@@ -273,9 +275,12 @@ document.getElementById('quizForm').addEventListener('submit', async (e) => {
         const container = document.getElementById('quizResult');
         const content = document.getElementById('quizContent');
 
-        if (data.quiz && data.quiz.questions) {
+        // 兼容两种返回结构：Flask 后端与边缘函数都把 questions 放在顶层
+        const questions = (data.quiz && data.quiz.questions) || data.questions || [];
+
+        if (questions.length > 0) {
             container.style.display = 'block';
-            content.innerHTML = data.quiz.questions.map(q => `
+            content.innerHTML = questions.map(q => `
                 <div class="quiz-question">
                     <h4>题目 ${q.id}</h4>
                     <p>${escapeHtml(q.prompt)}</p>

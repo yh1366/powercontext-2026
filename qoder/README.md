@@ -198,7 +198,7 @@ python app.py
 | 部署 | 通过 Qoder Sites 发布站点，处理 Edge Function 路由与静态资源路径 |
 | 文档 | 生成 README、部署说明、验证样例与本仓库的验证记录 |
 
-> Qoder 账号 UID：`TODO-填写你的 Qoder UID`（用于核对站点归属与使用记录）
+> Qoder 账号 UID：`01a180e8-e634-744f-87dc-5cebe25d65f4`（用于核对站点归属与使用记录）
 >
 > 对话截图 / 录屏：`docs/qoder/`（提交前把关键环节截图放到该目录）
 
