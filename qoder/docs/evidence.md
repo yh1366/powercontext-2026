@@ -138,3 +138,40 @@ answer head: Based on your study materials: [1] From "数据库索引原理": �
 （`seekdb_backend` / `powercontext_backend` = `memory-fallback`，`mode=degraded`）。
 Qoder Sites 上发布的在线演示站点运行在边缘函数中，无法访问本地 seekdb（MySQL 协议）与
 PowerContext 服务，因此线上为演示模式，上述完整链路需按第 1 节在本地启动。
+
+## 7. 干净环境复现（仅按运行说明操作）
+
+为了确认「评审拿到仓库后能跑起来」，在一台没有 seekdb、没有 PowerContext 的机器上，
+从远端重新 clone 提测分支，只按 README 的「方式 A」执行：
+
+```bash
+git clone -b 2026-competition-ecosystem https://github.com/yh1366/powercontext-2026
+cd powercontext-2026
+pip install -r requirements.txt          # 14 个包，全部安装成功
+python app.py
+```
+
+实测结果（无任何外部服务，seekdb/PowerContext 端口都指向不存在的端口）：
+
+```
+启动到可访问：约 2 秒
+GET  /                     -> 200
+GET  /api/health           -> {"status":"ok","mode":"degraded","seekdb":false,
+                               "seekdb_backend":"memory-fallback",
+                               "powercontext":false,"material_count":5}
+GET  /api/materials        -> 200（首次启动自动写入 5 条示例资料）
+POST /api/quiz/generate    -> questions 2（来自"数据库索引原理""向量检索与语义搜索"）
+POST /api/ask              -> materials 2，answer 343 字
+```
+
+即：没有数据库服务时，服务照常启动、页面与检索/出题/问答都可用，只是不持久；
+接上 seekdb 与 PowerContext 后自动切到 `mode=full`（见第 2 节），无需改代码。
+
+三项与自动评测直接相关的加固：
+
+| 问题 | 现象 | 处理 |
+|------|------|------|
+| 仓库根目录无入口 | 评测器在根目录找不到依赖/入口 | 根目录增加 `app.py`、`requirements.txt`、`requirements-full.txt`，转发到 `qoder/`；`sys.modules` 注册后再 `exec_module`，否则 Flask 按 CWD 解析 `../frontend`，所有页面 404 |
+| 启动慢/双进程 | `FLASK_DEBUG` 默认 `True` 会开 reloader；连接不存在的 seekdb 端口要重试约 15 秒 | 默认关闭 debug、支持 `PORT`/`HOST`；连接前先做 1.5 秒端口探测，启动从约 17 秒降到约 2 秒 |
+| 中文检索为空 | 降级实现按空格分词，中文整句永不命中，出题与问答返回空 | 改为中文字符 + 二元组分词，按命中比例计分 |
+
