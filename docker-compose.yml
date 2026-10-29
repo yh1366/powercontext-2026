@@ -1,0 +1,14 @@
+services:
+  studymind:
+    build: .
+    container_name: studymind
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - HOST=0.0.0.0
+      # Point these at real services to get mode=full instead of degraded:
+      # - SEEKDB_HOST=seekdb
+      # - SEEKDB_PORT=2881
+      # - POWERCONTEXT_API_URL=http://powercontext:8848
+    restart: unless-stopped

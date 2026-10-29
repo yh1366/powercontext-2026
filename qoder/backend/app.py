@@ -80,6 +80,7 @@ def serve_assets(filename):
 # --------------- Health & Status ---------------
 
 @app.route('/api/health')
+@app.route('/health')
 def health():
     seekdb_live = isinstance(material_client, SeekDBClient) and material_client.health_check()
     pc_live = isinstance(memory_client, PowerContextClient) and memory_client.health_check()
@@ -167,6 +168,23 @@ def list_materials():
 
 # --------------- Learning Progress APIs ---------------
 
+def _memory_response(result, subject=None, topic=None):
+    """Normalise both memory backends into one response shape.
+
+    PowerContext returns an ``artifact_id``, the in-memory fallback returns an
+    ``id``. Callers (and the UI) should not have to care which one answered.
+    """
+    payload = dict(result or {})
+    payload.setdefault('status', 'saved')
+    if not payload.get('id'):
+        payload['id'] = payload.get('artifact_id')
+    if not payload.get('artifact_id'):
+        payload['artifact_id'] = payload.get('id')
+    payload.setdefault('subject', subject)
+    payload.setdefault('topic', topic)
+    return payload
+
+
 @app.route('/api/progress', methods=['POST'])
 def update_progress():
     """Update learning progress for a topic."""
@@ -181,7 +199,7 @@ def update_progress():
         progress_pct=data['progress'],
         notes=data.get('notes', ''),
     )
-    return jsonify(result or {'status': 'saved'}), 201
+    return jsonify(_memory_response(result, data['subject'], data['topic'])), 201
 
 
 @app.route('/api/progress/summary', methods=['GET'])
@@ -207,46 +225,113 @@ def add_weak_point():
         topic=data['topic'],
         description=data['description'],
     )
-    return jsonify(result or {'status': 'saved'}), 201
+    return jsonify(_memory_response(result, data['subject'], data['topic'])), 201
 
 
 # --------------- Recommendations APIs ---------------
 
+def _parse_subject_topic(content):
+    """Recover subject/topic from a memory text.
+
+    Memories are written as ``学习进度 | 学科 > 主题 | 完成度 75%``. The real
+    PowerContext service returns only ``metadata.revision`` (the structured
+    fields live in the text), so parsing here keeps the API response identical
+    across the real and the in-memory backends.
+    """
+    parts = [p.strip() for p in (content or '').split('|')]
+    if len(parts) >= 2 and '>' in parts[1]:
+        subject, _, topic = parts[1].partition('>')
+        return subject.strip() or None, topic.strip() or None
+    return None, None
+
+
 @app.route('/api/recommendations', methods=['GET'])
 def get_recommendations():
-    """Get personalized study recommendations based on learning history."""
+    """Build recommendations from recalled memories plus stored materials.
+
+    This used to return empty lists in the common case: the recall query was
+    English ("study progress weak points") against Chinese memories, and the
+    material search used the same English keyword, so both lookups matched
+    nothing. The fallbacks below keep the feature useful instead of silent.
+    """
     subject = request.args.get('subject', None)
 
-    # Recall relevant memories
-    query = f'study progress weak points {subject or ""}'
-    memories = memory_client.recall_memories(query, limit=20)
+    # 1. Recall memories (Chinese-aware; falls back to the most recent ones).
+    memories = memory_client.recall_memories(subject or '学习 进度 薄弱点', limit=20)
+    if not memories:
+        memories = memory_client.get_learning_summary(subject).get('memories', [])[-20:]
+    if not isinstance(memories, list):
+        memories = []
 
-    # Search for related materials
-    search_query = subject or 'study'
-    materials = material_client.search(search_query, subject=subject, limit=5)
+    # 2. Find candidate materials; never return an empty suggestion list when
+    #    the library actually holds something.
+    materials = material_client.search(subject or '学习', subject=subject, limit=5)
+    if not materials:
+        materials = material_client.list_materials(subject, limit=5)
 
-    # Build recommendations
+    focus_areas, next_steps = [], []
+    for mem in memories:
+        content = mem.get('content', '') if isinstance(mem, dict) else str(mem)
+        meta = mem.get('metadata', {}) if isinstance(mem, dict) else {}
+        subject_name = meta.get('subject')
+        topic_name = meta.get('topic')
+        if not subject_name:
+            subject_name, topic_name2 = _parse_subject_topic(content)
+            topic_name = topic_name or topic_name2
+        if '薄弱' in content or mem.get('family') == 'weak-point':
+            focus_areas.append({
+                'subject': subject_name,
+                'topic': topic_name,
+                'reason': content,
+            })
+        elif '进度' in content or mem.get('family') == 'progress':
+            if meta.get('progress') is None or meta.get('progress', 0) < 100:
+                next_steps.append({
+                    'subject': subject_name,
+                    'topic': topic_name,
+                    'action': '继续复习并完成自测',
+                    'reason': content,
+                })
+
+    if not focus_areas:
+        # Recall is similarity based and can miss an older weak point, so fall
+        # back to scanning the whole scope before reporting "no focus areas".
+        for mem in memory_client.get_learning_summary(subject).get('memories', []):
+            content = mem.get('content', '')
+            if '薄弱' not in content and mem.get('family') != 'weak-point':
+                continue
+            meta = mem.get('metadata', {})
+            subject_name = meta.get('subject')
+            topic_name = meta.get('topic')
+            if not subject_name:
+                subject_name, topic_name2 = _parse_subject_topic(content)
+                topic_name = topic_name or topic_name2
+            focus_areas.append({
+                'subject': subject_name,
+                'topic': topic_name,
+                'reason': content,
+            })
+
     recommendations = {
-        'based_on_memories': len(memories) if isinstance(memories, list) else 0,
-        'suggested_materials': materials[:3],
-        'focus_areas': [],
-        'next_steps': [],
+        'based_on_memories': len(memories),
+        'suggested_materials': [
+            {
+                'id': m.get('id'),
+                'title': (m.get('metadata') or {}).get('title') or m.get('title'),
+                'subject': (m.get('metadata') or {}).get('subject') or m.get('subject'),
+                'reason': '与当前学习主题相关',
+            }
+            for m in materials[:3]
+        ],
+        'focus_areas': focus_areas[:5],
+        'next_steps': next_steps[:5],
     }
 
-    # Extract weak points from memories
-    if isinstance(memories, list):
-        for m in memories:
-            content = m.get('content', '') if isinstance(m, dict) else str(m)
-            if 'weak point' in content.lower():
-                recommendations['focus_areas'].append(content)
-            elif 'progress' in content.lower() and '%' in content:
-                recommendations['next_steps'].append(content)
-
-    # Save recommendation event
     memory_client.save_experience(
         situation=f'User requested recommendations for {subject or "general study"}',
         action='Generated personalized recommendations',
-        outcome=f'Found {len(materials)} related materials',
+        outcome=(f'Found {len(materials)} related materials and '
+                 f'{len(focus_areas)} focus areas'),
         lesson=f'User is focusing on {subject or "multiple subjects"}',
     )
 
@@ -513,6 +598,7 @@ def load_sample_data():
 
     return jsonify({
         'status': 'loaded',
+        'loaded': len(results),
         'count': len(results),
         'materials': results,
     })

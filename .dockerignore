@@ -1,0 +1,8 @@
+.git
+**/__pycache__
+**/*.pyc
+**/.venv
+**/data
+**/*.log
+qoder/seekdb-data
+**/.powercontext-scope.json

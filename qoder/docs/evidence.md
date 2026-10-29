@@ -175,3 +175,47 @@ POST /api/ask              -> materials 2，answer 343 字
 | 启动慢/双进程 | `FLASK_DEBUG` 默认 `True` 会开 reloader；连接不存在的 seekdb 端口要重试约 15 秒 | 默认关闭 debug、支持 `PORT`/`HOST`；连接前先做 1.5 秒端口探测，启动从约 17 秒降到约 2 秒 |
 | 中文检索为空 | 降级实现按空格分词，中文整句永不命中，出题与问答返回空 | 改为中文字符 + 二元组分词，按命中比例计分 |
 
+
+## 8. Linux 复现（本次针对"主要功能运行失败"的复测）
+
+评测机为 Linux，此前只在 Windows 上验证过，所以这里用官方 `python:3.12-slim` 镜像
+从零复现三条最常见的启动约定，全部通过（容器内无 seekdb / PowerContext 服务）：
+
+| 启动方式 | 结果 |
+|---|---|
+| `pip install -r requirements.txt && python app.py`（仓库根目录） | 2 秒就绪，全部接口 200 |
+| `python main.py`（根目录别名入口） | 2 秒就绪，全部接口 200 |
+| `cd qoder && python app.py` | 2 秒就绪，全部接口 200 |
+| `docker build -t studymind . && docker run -p 5000:5000 studymind` | 构建成功，容器 22 秒内 `healthy` |
+| `python -m pytest -q`（根目录，`pytest.ini` 限定 `qoder/tests`） | 9 passed |
+
+接口逐项结果（`mode=degraded`，即无外部服务时的最小可运行形态）：
+
+```
+GET  /                       200  <!DOCTYPE html> …
+GET  /css/style.css          200
+GET  /js/app.js              200
+GET  /api/health             200  {"mode":"degraded","seekdb_backend":"memory-fallback","material_count":5}
+GET  /health                 200  （别名，兼容只探 /health 的探针）
+GET  /api/materials          200  count=5
+GET  /api/materials/search?q=向量检索     200  count=1  命中「向量检索与语义搜索」
+GET  /api/materials/search?q=索引&subject=数据库系统  200  count=1  仅本学科
+POST /api/quiz/generate      200  questions=2
+POST /api/ask                200  materials=2  answer=518 字
+POST /api/progress           201  id=mem_10  artifact_id=mem_10
+POST /api/weak-points        201  id=mem_11
+GET  /api/progress/summary   200  total=11
+GET  /api/recommendations    200  materials=1 focus=1 next=1 based_on=5
+POST /api/load-samples       200  loaded=5
+```
+
+本轮修掉的两个功能缺陷（此前会让"核心功能"看起来是空的）：
+
+1. `GET /api/recommendations` 原来固定返回空数组：召回用的英文关键词
+   （`study progress weak points`）匹配不上中文记忆，资料检索也用同一个英文词。
+   现改为中文召回 + 记忆摘要兜底 + 资料列表兜底，并从 `weak-point` / `progress`
+   记忆派生 focus_areas 与 next_steps。
+2. `POST /api/progress`、`/api/weak-points` 的返回里没有 `id`（真实 PowerContext 只给
+   `artifact_id`），调用方拿不到记录标识。现统一为两者都返回。
+
+另外，`qoder/tests/test_smoke.py` 提供 9 个冒烟用例，评审可用一条命令自检。
