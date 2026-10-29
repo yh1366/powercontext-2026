@@ -18,12 +18,31 @@ class ContextPackError(Exception):
 
 PACK_SCHEMA = "powercontext.context-pack.v1"
 DELTA_SCHEMA = "powercontext.context-pack-delta.v1"
-# A rendered preparation rewrites every entry citation on each memory revision, so the only
-# bytes shared by two consecutive rounds are the fixed prologue.  Small chunks keep that
-# prologue reusable; the extra JSON framing costs far less than resending the whole body.
-INCREMENTAL_CHUNK_BYTES = 128
+# Consecutive preparations differ by insertions (a newly appended Memory entry, a longer
+# suffix).  Fixed-size chunks shift every boundary after an insertion, so bytes that did not
+# change are resent anyway.  Content-defined chunking anchors boundaries on the bytes
+# themselves: an insertion only re-chunks a local neighbourhood and the stream re-synchronises
+# within roughly one average chunk, which is what the transfer-cost gate measures.
+INCREMENTAL_CHUNK_BYTES = 2048
+_CHUNK_AVERAGE_BITS = 9
+_CHUNK_AVERAGE = 1 << _CHUNK_AVERAGE_BITS  # geometric mean distance between boundaries
+_CHUNK_MIN_BYTES = 64
 _PACK_FIELDS = frozenset({"schema", "items", "digest", "byte_count"})
 _DELTA_FIELDS = frozenset({"schema", "base_digest", "target_digest", "prefix_items", "appended"})
+
+
+def _build_gear_table() -> tuple[int, ...]:
+    """Deterministic pseudo-random Gear table; the derivation is fixed, not seeded."""
+
+    return tuple(
+        int.from_bytes(hashlib.sha256(b"powercontext.gear" + bytes([index])).digest()[:8], "big")
+        for index in range(256)
+    )
+
+
+_GEAR = _build_gear_table()
+_GEAR_MASK64 = (1 << 64) - 1
+_BOUNDARY_MASK = (1 << _CHUNK_AVERAGE_BITS) - 1
 
 
 def _load_object(data: bytes) -> dict:
@@ -64,9 +83,7 @@ class ContextPack:
 
     @classmethod
     def build(cls, items: tuple[bytes, ...]) -> Self:
-        items = tuple(
-            item.encode("utf-8") if isinstance(item, str) else bytes(item) for item in items
-        )
+        items = tuple(item.encode("utf-8") if isinstance(item, str) else bytes(item) for item in items)
         encoded = [base64.b64encode(item).decode("ascii") for item in items]
         unsigned = {
             "schema": "powercontext.context-pack.v1",
@@ -123,18 +140,23 @@ class ContextPack:
             raise ContextPackError("chunk_bytes must be a positive integer")
         encoded = content.encode("utf-8") if isinstance(content, str) else bytes(content)
         items: list[bytes] = []
-        pos = 0
-        while pos < len(encoded):
-            end = min(pos + chunk_bytes, len(encoded))
-            if end < len(encoded):
-                while end > pos and (encoded[end] & 0xC0) == 0x80:
-                    end -= 1
-                if end == pos:
-                    raise ContextPackError(
-                        f"character at byte {pos} does not fit in chunk_bytes={chunk_bytes}"
-                    )
-            items.append(encoded[pos:end])
-            pos = end
+        start = 0
+        rolling = 0
+        for pos in range(len(encoded)):
+            rolling = ((rolling << 1) + _GEAR[encoded[pos]]) & _GEAR_MASK64
+            reached_limit = pos + 1 - start >= chunk_bytes
+            boundary_hit = not reached_limit and pos + 1 - start >= _CHUNK_MIN_BYTES and (rolling & _BOUNDARY_MASK) == 0
+            if reached_limit or boundary_hit:
+                end = pos + 1
+                if end < len(encoded):
+                    while end > start and (encoded[end] & 0xC0) == 0x80:
+                        end -= 1  # do not cut a multi-byte character: back up to its first byte
+                if end == start:
+                    raise ContextPackError(f"character at byte {start} does not fit in chunk_bytes={chunk_bytes}")
+                items.append(encoded[start:end])
+                start = end
+        if start < len(encoded):
+            items.append(encoded[start:])
         return cls.build(tuple(items))
 
     def __eq__(self, other: object) -> bool:
