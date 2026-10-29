@@ -533,11 +533,15 @@ class ScopedRecordApplication:
         /,
     ) -> SourceRecord:
         async with self._runtime._scope_operation(self.scope_id), self._runtime._locked(self.scope_id):
-            return await self._runtime._records().create_source(
+            record = await self._runtime._records().create_source(
                 self.scope_id,
                 source_type,
                 content,
             )
+        # A server-created Source is one more journal identity, so it can be the
+        # one that reaches a pending-count threshold.
+        self._runtime._wake_count_admission()
+        return record
 
     async def get_source(self, source_type: str, source_id: str, /) -> SourceRecord:
         async with self._runtime._scope_operation(self.scope_id):
@@ -565,7 +569,11 @@ class ScopedRecordApplication:
         /,
     ) -> ArtifactCreated:
         async with self._runtime._scope_operation(self.scope_id), self._runtime._locked(self.scope_id):
-            return await self._runtime._records().create_artifact(self.scope_id, family, write)
+            created = await self._runtime._records().create_artifact(self.scope_id, family, write)
+        # Artifact creation publishes a lineage-only Source journal identity, which
+        # counts toward a launch threshold while staying out of generation evidence.
+        self._runtime._wake_count_admission()
+        return created
 
     async def get_artifact(self, family: str, artifact_id: str, /) -> ArtifactRecord:
         async with self._runtime._scope_operation(self.scope_id):
