@@ -244,11 +244,19 @@ def apply_context_pack_delta(base: ContextPack, delta: ContextPackDelta) -> Cont
     if base.digest != delta.base_digest:
         raise ContextPackError("base digest mismatch")
 
-    if delta.prefix_items > len(base.items):
+    prefix = delta.prefix_items
+    # Deltas built by hand never went through from_bytes, so the wire contract's
+    # "non-negative integer, never a bool or a float" has to be re-checked here:
+    # base.items[:True] would otherwise silently mean "keep one item".
+    if isinstance(prefix, bool) or not isinstance(prefix, int):
+        raise ContextPackError("prefix_items must be a non-negative integer")
+    if prefix < 0:
+        raise ContextPackError("prefix_items must be a non-negative integer")
+    if prefix > len(base.items):
         raise ContextPackError("prefix_items exceeds base item count")
 
-    target_items = base.items[: delta.prefix_items] + delta.appended
-    target = ContextPack.build(target_items)
+    appended = tuple(bytes(item) for item in delta.appended)
+    target = ContextPack.build(base.items[:prefix] + appended)
 
     if target.digest != delta.target_digest:
         raise ContextPackError("target digest mismatch after delta application")

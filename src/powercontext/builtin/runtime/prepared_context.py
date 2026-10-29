@@ -354,8 +354,12 @@ class PreparedContextBuilder:
         entries, omissions = self._fit_entries(request, memory_entries, topic_memory_entries, experience_entries)
         if not entries:
             return None, (), omissions
-        ordered = tuple(sorted(entries, key=_stable_entry_key))
-        return _render(ordered), tuple(entry.origin for entry in ordered), omissions
+        # Render in selection order, never in identity order.  Entry identities are random
+        # uuids, so sorting by them permutes the body and drops every new Memory entry at a
+        # random offset - an incremental delta then has to resend everything after it.  The
+        # pooled candidates arrive in first-seen order, which only ever grows at the tail,
+        # so keeping that order is what makes the body prefix-stable across rounds.
+        return _render(entries), tuple(entry.origin for entry in entries), omissions
 
     def _select_text(
         self,
