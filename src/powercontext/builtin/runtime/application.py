@@ -837,6 +837,50 @@ class ScopedContextApplication:
     def __init__(self, runtime: BuiltinRuntime, scope_id: str) -> None:
         self._runtime = runtime
         self.scope_id = validate_scope_id(scope_id)
+        # Per-scope Memory pooling for the incremental pack. The delta protocol only
+        # reuses the base pack's leading chunks, so a sliding recall window would move
+        # the first changed chunk into the middle of every body and force a full
+        # resend each round. Pooling keeps the rendered candidate set append-only.
+        self._memory_pool: dict[str, dict[str, MemoryHit]] = {}
+        self._memory_first_seen: dict[str, dict[str, int]] = {}
+
+    def _merge_memory_candidates(
+        self,
+        candidates: Sequence[PreparedMemoryCandidates],
+    ) -> list[PreparedMemoryCandidates]:
+        """Pool recalled Memory hits per scope and order them by first appearance.
+
+        New entries land at the tail of the pooled order, and entries recalled on
+        earlier rounds keep their position even when this round's ranking drops
+        them. Every pooled hit is reported against the artifact's current revision
+        so the rendered citations share one revision and the envelope can carry it
+        once instead of per item.
+        """
+
+        merged: list[PreparedMemoryCandidates] = []
+        for group in candidates:
+            pool = self._memory_pool.setdefault(group.scope_id, {})
+            first_seen = self._memory_first_seen.setdefault(group.scope_id, {})
+            for hit in group.hits:
+                if hit.entry_id not in first_seen:
+                    first_seen[hit.entry_id] = len(first_seen)
+                previous = pool.get(hit.entry_id)
+                if previous is None or previous.entry_version_id != hit.entry_version_id:
+                    pool[hit.entry_id] = hit
+            ordered: list[tuple[int, str, MemoryHit]] = []
+            for entry_id, hit in pool.items():
+                if group.memory_ref is not None and hit.memory_ref != group.memory_ref:
+                    hit = hit.model_copy(update={"memory_ref": group.memory_ref})
+                ordered.append((first_seen.get(entry_id, len(first_seen)), entry_id, hit))
+            ordered.sort()
+            merged.append(
+                PreparedMemoryCandidates(
+                    scope_id=group.scope_id,
+                    memory_ref=group.memory_ref,
+                    hits=tuple(hit for _, _, hit in ordered),
+                )
+            )
+        return merged
 
     async def prepare(
         self,
@@ -997,6 +1041,7 @@ class ScopedContextApplication:
                 round_zero=round_zero,
             )
         code = await self._code_candidates(request) if request.include_code else ()
+        memory_candidates = self._merge_memory_candidates(memory_candidates)
         with self._runtime._stage(
             "context.build",
             attributes={

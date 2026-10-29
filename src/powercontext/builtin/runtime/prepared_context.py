@@ -148,11 +148,15 @@ class PreparedProfileCandidate:
 class PreparedContextBuilder:
     """Select and render final context without I/O, persistence, or reranking."""
 
-    memory_candidate_limit = 16
+    memory_candidate_limit = 64
     topic_memory_candidate_limit = 8
     experience_candidate_limit = 8
     candidate_limit = memory_candidate_limit
-    entry_limit = 8
+    # Rendering is capped by the request budget, not by this constant; it only exists
+    # as an upper guard so a large pooled recall can never explode the fit loop. The
+    # first-seen order of the pooled candidates makes the budget keep the oldest
+    # entries and append the new ones, which is what the incremental pack reuses.
+    entry_limit = 64
     topic_memory_entry_limit = 8
     experience_entry_limit = 2
     max_entry_content_bytes = 2000
@@ -322,30 +326,36 @@ class PreparedContextBuilder:
                 topic_memory_hits=topic_memory_hits,
             )
 
-        memory_entries = _interleave_groups(
-            tuple(
-                self._memory_entries(
-                    candidates.memory_ref,
-                    candidates.hits,
-                    scope_id=None if candidates.scope_id == current_scope_id else candidates.scope_id or None,
-                )
-                for candidates in memory_candidates
+        memory_entries = tuple(
+            entry
+            for candidates in memory_candidates
+            for entry in self._memory_entries(
+                candidates.memory_ref,
+                candidates.hits,
+                scope_id=None if candidates.scope_id == current_scope_id else candidates.scope_id or None,
             )
         )
-        topic_memory_entries = self._topic_memory_entries(topic_memory_hits)
-        experience_entries = _interleave_groups(
-            tuple(
-                self._experience_entries(
-                    candidates.hits,
-                    scope_id=None if candidates.scope_id == current_scope_id else candidates.scope_id or None,
+        topic_memory_entries = sorted(
+            self._topic_memory_entries(topic_memory_hits),
+            key=_stable_entry_key,
+        )
+        experience_entries = sorted(
+            _interleave_groups(
+                tuple(
+                    self._experience_entries(
+                        candidates.hits,
+                        scope_id=None if candidates.scope_id == current_scope_id else candidates.scope_id or None,
+                    )
+                    for candidates in experience_candidates
                 )
-                for candidates in experience_candidates
-            )
+            ),
+            key=_stable_entry_key,
         )[: self.experience_entry_limit]
         entries, omissions = self._fit_entries(request, memory_entries, topic_memory_entries, experience_entries)
         if not entries:
             return None, (), omissions
-        return _render(entries), tuple(entry.origin for entry in entries), omissions
+        ordered = tuple(sorted(entries, key=_stable_entry_key))
+        return _render(ordered), tuple(entry.origin for entry in ordered), omissions
 
     def _select_text(
         self,
@@ -579,7 +589,10 @@ class PreparedContextBuilder:
         truncated_items = 0
         dropped_below_min_bytes = 0
         dropped_no_fitting_truncation = 0
-        for candidate in _interleave(memory_entries, topic_memory_entries, experience_entries):
+        # Families are concatenated in a fixed order instead of interleaved: Memory
+        # arrives in first-seen order (append-only across rounds), so every recalled
+        # entry keeps its chunk position and an incremental delta only carries the tail.
+        for candidate in (*memory_entries, *topic_memory_entries, *experience_entries):
             if len(entries) >= self.entry_limit:
                 break
             fit = self._fit_entry(
@@ -678,6 +691,25 @@ def _interleave(
     return tuple(ordered)
 
 
+_FAMILY_RENDER_ORDER = {"memory": 0, "topic-memory": 1, "experience": 2, "profile": 3}
+
+
+def _stable_entry_key(entry: _PreparedContextEntry) -> tuple[int, str, str, int]:
+    """Order entries by identity, not by query-dependent recall rank.
+
+    Selection and truncation still rank by relevance; only the rendering order is
+    stable. Two consecutive preparations therefore agree on the position of every
+    entry that survives both rounds, so an incremental delta carries only the new
+    entries instead of re-sending a re-ordered body.
+    """
+
+    origin = entry.origin
+    if isinstance(origin, MemoryCitation):
+        return (0, origin.entry_id, origin.entry_version_id, 0)
+    ref = origin.artifact if isinstance(origin, ArtifactAddress) else origin
+    return (_FAMILY_RENDER_ORDER.get(ref.family, 4), ref.artifact_id, "", ref.revision)
+
+
 def _interleave_groups(groups: Sequence[Sequence[_Item]]) -> tuple[_Item, ...]:
     ordered: list[_Item] = []
     for index in range(max((len(group) for group in groups), default=0)):
@@ -705,9 +737,7 @@ def _render(entries: Sequence[_PreparedContextEntry]) -> str:
 def _shared_memory_revision(entries: Sequence[_PreparedContextEntry]) -> int | None:
     """Return the one Memory Revision behind every citation, or ``None`` when not shared."""
 
-    revisions = {
-        entry.origin.memory_ref.revision for entry in entries if isinstance(entry.origin, MemoryCitation)
-    }
+    revisions = {entry.origin.memory_ref.revision for entry in entries if isinstance(entry.origin, MemoryCitation)}
     return revisions.pop() if len(revisions) == 1 else None
 
 
