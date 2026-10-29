@@ -67,11 +67,12 @@ StudyMind 把「知识」和「学习状态」分开存：**seekdb 负责知识�
 
 ## 快速开始
 
-项目有两个等价入口（同一份实现，`qoder/backend/app.py`）：
+项目有三个等价入口（同一份实现，`qoder/backend/app.py`）：
 
 ```bash
 python app.py                 # 仓库根目录
-python qoder/backend/app.py   # qoder 目录内
+python main.py                # 仓库根目录的别名入口
+cd qoder && python app.py     # 进入项目目录后启动
 ```
 
 服务默认监听 `0.0.0.0:5000`，同时识别通用的 `PORT` / `HOST` 环境变量，可直接跑在容器里。
@@ -86,6 +87,12 @@ python app.py
 打开 http://localhost:5000 即可体验全部页面功能。首次启动会自动写入 5 条示例资料，
 因此不接任何外部服务也能检索、出题、记录进度。此时 `/api/health` 返回
 `mode=degraded`、`seekdb_backend=memory-fallback`，属于如实报告。
+
+自检（9 个冒烟用例，覆盖检索、出题、进度写入、问答、推荐）：
+
+```bash
+python -m pytest -q          # 仓库根目录，pytest.ini 已限定只收集 qoder/tests
+```
 
 > 想在这个模式下也用上真实 seekdb 检索：Linux 上执行
 > `pip install -r qoder/requirements-full.txt && pip install pylibseekdb`，

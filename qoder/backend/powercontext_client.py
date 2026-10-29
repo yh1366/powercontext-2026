@@ -21,6 +21,7 @@ cached in `qoder/.powercontext-scope.json` and reused on later runs.
 """
 
 import os
+import re
 import json
 import logging
 import requests
@@ -240,6 +241,23 @@ class FallbackMemoryStore:
     def health_check(self):
         return False
 
+    @staticmethod
+    def _tokens(text):
+        """Latin words plus Chinese characters and bigrams.
+
+        Chinese sentences carry no spaces, so the previous ``query.split()``
+        approach could never match a Chinese memory: recall always came back
+        empty and every recommendation built on it was an empty list.
+        """
+        text = (text or '').lower()
+        tokens = set(re.findall(r'[a-z0-9+_.#-]{2,}', text))
+        for seg in re.findall(r'[\u4e00-\u9fff]+', text):
+            if len(seg) == 1:
+                tokens.add(seg)
+            for i in range(len(seg) - 1):
+                tokens.add(seg[i:i + 2])
+        return tokens
+
     def _add(self, content, family, metadata=None):
         self._counter += 1
         entry = {
@@ -250,20 +268,32 @@ class FallbackMemoryStore:
             'ts': datetime.now().isoformat(timespec='seconds'),
         }
         self.memories.append(entry)
-        return {'status': 'saved_in_memory', 'artifact_id': entry['id']}
+        return {
+            'status': 'saved_in_memory',
+            'artifact_id': entry['id'],
+            'id': entry['id'],
+            'scope_id': self.scope_id,
+            'memory': entry,
+        }
 
     def save_memory(self, content, memory_type='note', metadata=None):
         return self._add(content, memory_type, metadata)
 
     def recall_memories(self, query, limit=10):
-        tokens = [t for t in query.lower().split() if t]
+        q_tokens = self._tokens(query)
+        if not q_tokens:
+            # No usable keywords: return the most recent memories instead of
+            # nothing, so callers always have context to work with.
+            return [{**m, 'score': 0.0} for m in self.memories[-limit:]]
         scored = []
         for mem in self.memories:
             text = mem['content'].lower()
-            score = sum(1 for t in tokens if t in text)
+            score = sum(1 for t in q_tokens if t in text)
             if score:
                 scored.append((score, mem))
         scored.sort(key=lambda x: x[0], reverse=True)
+        if not scored:
+            return [{**m, 'score': 0.0} for m in self.memories[-limit:]]
         return [{**m, 'score': s} for s, m in scored[:limit]]
 
     def get_prepared_context(self, query, max_bytes=4000):

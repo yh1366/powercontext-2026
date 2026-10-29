@@ -34,7 +34,8 @@ _spec.loader.exec_module(_backend)
 app = _backend.app
 
 
-if __name__ == '__main__':
+def main():
+    """Start the HTTP server (honours PORT/HOST, defaults to 5000)."""
     host = os.getenv('HOST') or os.getenv('FLASK_HOST', '0.0.0.0')
     port = int(os.getenv('PORT') or os.getenv('FLASK_PORT') or '5000')
     try:
@@ -42,3 +43,7 @@ if __name__ == '__main__':
     except Exception:
         pass
     app.run(host=host, port=port, debug=False)
+
+
+if __name__ == '__main__':
+    main()
