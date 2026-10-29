@@ -1,0 +1,3 @@
+# Full dependency set (root shim) - adds the seekdb SDK for real retrieval.
+# See qoder/requirements-full.txt for details.
+-r qoder/requirements-full.txt

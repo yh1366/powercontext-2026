@@ -15,6 +15,7 @@ Implementation notes:
 
 import os
 import sys
+import re
 import json
 import socket
 import hashlib
@@ -366,20 +367,44 @@ class FallbackMaterialStore:
         self.materials.append(material)
         return {'id': doc_id, 'status': 'stored_in_memory', 'metadata': material}
 
+    @staticmethod
+    def _tokens(text):
+        """Tokenise text for scoring: latin words plus Chinese chars/bigrams.
+
+        Chinese queries contain no spaces, so splitting on whitespace alone
+        never matches anything - which silently returned zero results, and
+        therefore an empty quiz, whenever seekdb was unavailable.
+        """
+        text = (text or '').lower()
+        tokens = set()
+        for word in re.findall(r'[a-z0-9+_.#-]{2,}', text):
+            tokens.add(word)
+        for seg in re.findall(r'[\u4e00-\u9fff]+', text):
+            if len(seg) == 1:
+                tokens.add(seg)
+            for i in range(len(seg) - 1):
+                tokens.add(seg[i:i + 2])
+        return tokens
+
     def search(self, query, subject=None, limit=5, search_type='hybrid'):
         results = self.materials
         if subject:
             results = [m for m in results if m.get('subject') == subject]
-        query_lower = query.lower()
+        q_tokens = self._tokens(query)
+        if not q_tokens:
+            return [
+                {'id': m['id'], 'content': m['content'], 'metadata': m, 'score': 0.0}
+                for m in results[:limit]
+            ]
         scored = []
         for m in results:
-            text = f"{m.get('title', '')} {m.get('content', '')}".lower()
-            score = sum(1 for w in query_lower.split() if w and w in text)
-            if score:
-                scored.append((score, m))
+            text = f"{m.get('title', '')} {m.get('content', '')}"
+            hits = len(q_tokens & self._tokens(text))
+            if hits:
+                scored.append((hits / len(q_tokens), m))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [
-            {'id': m['id'], 'content': m['content'], 'metadata': m, 'score': s}
+            {'id': m['id'], 'content': m['content'], 'metadata': m, 'score': round(s, 4)}
             for s, m in scored[:limit]
         ]
 
