@@ -118,6 +118,24 @@ class MemoryIndex(Protocol):
     ) -> tuple[MemoryProjection, ...]: ...
 
 
+class NativeHybridMemoryIndex(Protocol):
+    """An index that can answer both channels from one native statement.
+
+    ``hybrid`` is an optimisation contract, not a capability: an implementation
+    reports it by having ``search_hybrid`` and ``capabilities.hybrid``.  When it is
+    present the composite asks it once instead of asking each single-channel index,
+    which is what keeps a hybrid candidate lookup to a single round trip.
+    """
+
+    async def search_hybrid(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        request: MemorySearchRequest,
+        /,
+    ) -> MemorySearchChannels: ...
+
+
 class NoMemoryIndex:
     """Truthfully expose an authoritative store without search projections."""
 
@@ -249,6 +267,15 @@ class CompositeMemoryIndex:
     ) -> MemorySearchChannels:
         fts: tuple[MemoryChannelHit, ...] = ()
         vector: tuple[MemoryChannelHit, ...] = ()
+        if request.mode == "hybrid":
+            # A backend that can express both channels in one statement answers the
+            # whole request alone; asking the single-channel indexes as well would
+            # issue the extra candidate queries this path exists to remove.
+            for index in self.indexes:
+                native = getattr(index, "search_hybrid", None)
+                if native is not None:
+                    channels = await native(connection, scope_id, request)
+                    return MemorySearchChannels(fts=channels.fts, vector=channels.vector)
         for index in self.indexes:
             channels = await index.search(connection, scope_id, request)
             fts += channels.fts

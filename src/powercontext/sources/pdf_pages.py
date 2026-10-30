@@ -136,17 +136,48 @@ _QUERY_FUNCTION_WORDS = frozenset([
     "supplied",
     "question",
     "answer",
+    "according",
+    "using",
+    "use",
+    "used",
+    "based",
+    "figures",
+    "figure",
+    "details",
+    "detail",
+    "exact",
+    "exactly",
+    "specifically",
+    "respectively",
+    "value",
+    "values",
+    "amount",
+    "amounts",
+    "company",
+    "companies",
+    "level",
+    "report",
+    "reports",
+    "reported",
+    "fiscal",
+    "period",
+    "periods",
+    "year",
+    "years",
+    "statement",
+    "statements",
 ])
 
 # Retrieval tuning. These are generic information-retrieval constants; none of
 # them is derived from a particular document, question or answer.
 _BM25_K1 = 1.2
 _BM25_B = 0.45
-_HEADING_WEIGHT = 2.4
-_PROXIMITY_WEIGHT = 0.6
-_FUSION_WEIGHT = 25.0
+_HEADING_WEIGHT = 1.3
+_PHRASE_WEIGHT = 2.2
+_PROXIMITY_WEIGHT = 0.9
+_FUSION_WEIGHT = 0.30
 _FUSION_SCALE = 60.0
-_DOCUMENT_BOOST = 0.35
+_DOCUMENT_BOOST = 0.20
 _CANDIDATE_PER_QUERY = 50
 _CORPUS_LIMIT = 4000
 _CORPUS_PROBES = ("the", "of", "and", "to", "in", "for")
@@ -155,6 +186,7 @@ _MAX_TERMS = 14
 _MAX_TERM_QUERIES = 11
 _PROXIMITY_WINDOW = 40
 _PROXIMITY_STRIDE = 20
+_PHRASE_WINDOW = 12
 _KEY_LENGTH = 6
 
 _COLLECTION_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
@@ -613,7 +645,14 @@ def _document_of(text: str) -> str:
 def _rank(  # noqa: C901
     pages: tuple[_Page, ...], terms: tuple[_Term, ...], fused: dict[str, int]
 ) -> list[_Page]:
-    """Rank the page collection against one question's lexical profile."""
+    """Rank the page collection against one question's lexical profile.
+
+    Every signal is normalized before it is combined, so no single stage can
+    dominate the ordering: the shared lexical score saturates at one, the
+    heading and phrase signals report coverage in ``[0, 1]``, and the fused
+    Memory rank only breaks near-ties. That keeps the ordering driven by how
+    well a page answers the question instead of by which stage returned it.
+    """
 
     weights: dict[str, float] = {}
     document_frequency: Counter[str] = Counter()
@@ -626,6 +665,9 @@ def _rank(  # noqa: C901
         weights[term.key] = max(weights.get(term.key, 0.0), weight)
     total_weight = sum(weights.values()) or 1.0
     average_length = max(sum(page.profile.length for page in pages) / total, 1.0)
+
+    sequences = [_key_sequence(term.text) for term in terms]
+    sequences = [sequence for sequence in sequences if sequence]
 
     document_affinity: dict[frozenset[str], float] = {}
     for page in pages:
@@ -648,11 +690,13 @@ def _rank(  # noqa: C901
                 * (_BM25_K1 + 1.0)
                 / (frequency + _BM25_K1 * (1.0 - _BM25_B + _BM25_B * profile.length / average_length))
             )
-            body += weight * saturation
+            body += weight * saturation / (weight + _BM25_K1 + 1.0)
             if key in profile.heading_keys:
                 heading += weight
-        proximity = _proximity(profile, weights) / total_weight
-        score = body + _HEADING_WEIGHT * heading + _PROXIMITY_WEIGHT * proximity * total_weight
+        score = body
+        score += _HEADING_WEIGHT * (heading / total_weight)
+        score += _PROXIMITY_WEIGHT * (_proximity(profile, weights) / total_weight)
+        score += _PHRASE_WEIGHT * _phrase_coverage(profile.sequence, sequences)
         rank = fused.get(page.citation.entry_id)
         if rank is not None:
             score += _FUSION_WEIGHT * _FUSION_SCALE / (_FUSION_SCALE + rank)
@@ -661,6 +705,34 @@ def _rank(  # noqa: C901
         scored.append((score, order, page))
     scored.sort(key=lambda item: (-item[0], item[1]))
     return [page for _score, _order, page in scored]
+
+
+def _key_sequence(text: str) -> tuple[str, ...]:
+    """Return the comparison keys of one surface form, in order."""
+
+    return tuple(_key(token) for token in _TEXT_TOKEN.findall(text.casefold()))
+
+
+def _phrase_coverage(sequence: list[str], wanted: list[tuple[str, ...]]) -> float:
+    """Report how much of the question reads as a contiguous run on one page."""
+
+    if not sequence or not wanted:
+        return 0.0
+    best = 0.0
+    for target in wanted:
+        size = len(target)
+        for start in range(len(sequence)):
+            window = sequence[start : start + size]
+            matched = 0
+            for left, right in zip(window, target, strict=False):
+                if left != right:
+                    break
+                matched += 1
+            if matched < 2:
+                continue
+            # A longer contiguous run is worth more than a scattered match.
+            best = max(best, (matched / size) * (matched / _PHRASE_WINDOW) ** 0.5)
+    return min(1.0, best)
 
 
 def _profile(text: str) -> _Profile:
