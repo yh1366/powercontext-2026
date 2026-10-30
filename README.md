@@ -7,7 +7,7 @@
 - 项目代码与详细说明：**[`qoder/`](qoder/README.md)**
 - 真实运行验证记录：**[`qoder/docs/evidence.md`](qoder/docs/evidence.md)**
 
-> 本仓库根目录的 `dify/`、`gaode/` 是赛事官方模板目录，其余目录为各赛道作品，相互独立、互不影响：
+> 本仓库根目录的 `dify/` 是赛事官方模板目录，其余目录为各赛道作品（含 `gaode/`），相互独立、互不影响：
 >
 > - **`qoder/`** — Qoder 赛道作品（StudyMind）。根目录的 `app.py` / `main.py` / `requirements.txt`
 >   只是让评审在任意目录下都能用一条命令启动它。
@@ -16,6 +16,8 @@
 > - **`stepfun/`** — 「seekdb × 阶跃星辰：端侧 AI 推理性能优化与 seekdb 混合检索」赛道作品（Edge KB，
 >   浏览器本地向量化 + seekdb 库内混合检索的迷你知识库），见 **[`stepfun/README.md`](stepfun/README.md)**
 >   与 **[`stepfun/docs/tech-note.md`](stepfun/docs/tech-note.md)**。启动方式：`cd stepfun && bash run.sh`。
+> - **`gaode/`** — 高德开放平台赛道作品（「周边去哪儿」周边探索 Skill），提交产物为单个 Skill 文件，
+>   见 **[`gaode/SKILL.md`](gaode/SKILL.md)** 与 **[`gaode/README.md`](gaode/README.md)**。
 
 ## 快速开始（不需要 Docker，不需要任何外部服务）
 
