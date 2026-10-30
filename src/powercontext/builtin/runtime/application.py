@@ -221,6 +221,12 @@ from powercontext.builtin.runtime.prepared_context import (
     PreparedMemoryCandidates,
     PreparedProfileCandidate,
 )
+from powercontext.builtin.runtime.source_lifecycle import (
+    SourceLifecycleApplication,
+    SourceLifecycleError,
+    SourceLifecycleService,
+    create_lifecycle_schema,
+)
 from powercontext.builtin.runtime.protocols import (
     BuiltinTriggers,
     PowerContextProvider,
@@ -1037,7 +1043,11 @@ class ScopedContextApplication:
                 round_zero=round_zero,
             )
         code = await self._code_candidates(request) if request.include_code else ()
-        memory_candidates = self._merge_memory_candidates(memory_candidates)
+        # The first-seen pool exists to keep the incremental body append-only, and
+        # `prepare_incremental` applies it. A plain preparation has no base pack to
+        # respect, so it keeps this round's ranking: pooling here would push a newly
+        # recalled entry behind everything ever seen, and a section limit would then
+        # drop it before it could be rendered.
         with self._runtime._stage(
             "context.build",
             attributes={
@@ -1533,7 +1543,7 @@ class ScopedContextApplication:
                 TopicMemorySearchResult(mode="fts")
                 if not configured
                 else (
-                    await self._runtime.topic_memory.for_scope(self.scope_id).search(
+                    await self._runtime.topic_memory.for_scope(self.scope_id).use_topic_memory(
                         SearchTopicMemoryRequest(query=bounded_query, limit=limit),
                         admission=admission,
                         query_embedding=reuse,
@@ -2705,6 +2715,33 @@ class ScopedTopicMemoryApplication:
         embedding_timeout_seconds: float | None = None,
         allow_embedding: bool = True,
     ) -> TopicMemorySearchResult:
+        """Search Topics, withholding those that lost their Source support.
+
+        The eligibility cache is process state, so a cold scope is resolved from
+        the side tables before the projection is filtered: a fresh Runtime over an
+        existing database must not serve a Topic withdrawn before the restart.
+        """
+
+        if self._runtime._lifecycle_cache_cold(self.scope_id):
+            await self._runtime._lifecycle_topic_probe(self.scope_id, None)
+        return await self._search(
+            request,
+            admission=admission,
+            query_embedding=query_embedding,
+            embedding_timeout_seconds=embedding_timeout_seconds,
+            allow_embedding=allow_embedding,
+        )
+
+    async def _search(
+        self,
+        request: SearchTopicMemoryRequest,
+        /,
+        *,
+        admission: AdmissionFloor | None = None,
+        query_embedding: MemoryQueryEmbedding | None = None,
+        embedding_timeout_seconds: float | None = None,
+        allow_embedding: bool = True,
+    ) -> TopicMemorySearchResult:
         search = self._runtime._topic_memory_search
         if search is None:
             raise _RuntimeStateError("topic-memory-search")
@@ -2743,6 +2780,7 @@ class ScopedTopicMemoryApplication:
                     query_embedding,
                     embedding_timeout_seconds,
                 )
+        result = self._filter_unsupported_topics(result)
         observer = self._runtime._topic_memory_search_observer
         if observer is not None:
             try:
@@ -2760,6 +2798,42 @@ class ScopedTopicMemoryApplication:
                     },
                 )
         return result
+
+    async def use_topic_memory(
+        self,
+        request: SearchTopicMemoryRequest,
+        /,
+        **kwargs: Any,
+    ) -> TopicMemorySearchResult:
+        """Search Topics and withhold the ones that lost their Source support.
+
+        The eligibility cache is process state, so an unsupported Topic is re-derived
+        here on a miss: a fresh Runtime over an existing database must not serve a
+        Topic whose support was withdrawn before the restart.
+        """
+
+        result = await self.search(request, **kwargs)
+        filtered = self._filter_unsupported_topics(result)
+        if filtered is result and result.hits and self._runtime._lifecycle_cache_cold(self.scope_id):
+            await self._runtime._lifecycle_topic_probe(self.scope_id, None)
+            filtered = self._filter_unsupported_topics(result)
+        return filtered
+
+    def _filter_unsupported_topics(self, result: TopicMemorySearchResult) -> TopicMemorySearchResult:
+        """Drop hits whose Topic lost its Source support.
+
+        Topic Memory has no per-artifact deactivation state, so the native search
+        projection withholds unsupported Topics instead: the Artifact revision stays
+        exactly readable, but it is no longer offered for retrieval or Context.
+        """
+
+        withdrawn = self._runtime._lifecycle_withdrawn_topics(self.scope_id)
+        if not withdrawn or not result.hits:
+            return result
+        kept = tuple(hit for hit in result.hits if _topic_key(hit.artifact_ref) not in withdrawn)
+        if len(kept) == len(result.hits):
+            return result
+        return result.model_copy(update={"hits": kept})
 
     async def _search_with_embedding(
         self,
@@ -3208,6 +3282,17 @@ class BuiltinRuntime:
         # would be empty on every round and the body would churn again.
         self._context_memory_pools: dict[str, dict[str, MemoryHit]] = {}
         self._context_memory_order: dict[str, dict[str, int]] = {}
+        # Source-driven eligibility (memory-01). Registrations live in a side table so
+        # they survive a restart; the DAG walk and the native Memory / Topic Memory
+        # effect are driven from the lifecycle service.
+        self.lifecycle = SourceLifecycleApplication(self)
+        self._lifecycle_schema_lock = asyncio.Lock()
+        self._lifecycle_schema_ready = False
+        # Topic Memory has no deactivation state of its own, so an unsupported Topic is
+        # filtered out of the native search projection instead. The set is a process
+        # cache of the authoritative DAG, rebuilt from the side tables on demand.
+        self._lifecycle_withdrawn_topic_ids: dict[str, frozenset[str]] = {}
+        self._lifecycle_topic_ready_scopes: set[str] = set()
 
     def _context_memory_pool(self, scope_id: str) -> tuple[dict[str, MemoryHit], dict[str, int]]:
         """Return the memo of Memory hits ever recalled in one scope, plus their order."""
@@ -3217,6 +3302,124 @@ class BuiltinRuntime:
             pool = self._context_memory_pools[scope_id] = {}
             self._context_memory_order[scope_id] = {}
         return pool, self._context_memory_order[scope_id]
+
+    async def _lifecycle(self, scope_id: str) -> SourceLifecycleService:
+        """Return the lifecycle service for one scope, creating its side tables once."""
+
+        await self._ensure_lifecycle_schema()
+        scope = validate_scope_id(scope_id)
+        # Rebuild the eligibility cache whenever a Runtime starts against an existing
+        # database, so a withdrawal recorded before the restart still hides from lists.
+        await self._lifecycle_topic_probe(scope, None)
+        return SourceLifecycleService(
+            self._records()._database,
+            scope,
+            entry_reader=lambda citation: self._lifecycle_read_entry(scope, citation),
+            entry_writer=lambda citation, available: self._lifecycle_write_entry(scope, citation, available),
+            topic_probe=lambda reference: self._lifecycle_topic_probe(scope, reference),
+        )
+
+    async def _ensure_lifecycle_schema(self) -> None:
+        if self._lifecycle_schema_ready:
+            return
+        async with self._lifecycle_schema_lock:
+            if self._lifecycle_schema_ready:
+                return
+            await create_lifecycle_schema(self._records()._database)
+            self._lifecycle_schema_ready = True
+
+    async def _lifecycle_read_entry(self, scope_id: str, citation: MemoryCitation) -> MemoryEntryVersion:
+        async with self._context(scope_id) as context:
+            memory = await context.artifacts.memory.revision(citation.memory_ref)
+            _validate_memory_identity(context.artifacts.memory_artifact_id, memory)
+            return await _cited_entry(context.artifacts.memory, memory, citation)
+
+    async def _lifecycle_write_entry(
+        self,
+        scope_id: str,
+        citation: MemoryCitation,
+        available: bool,
+    ) -> ArtifactRef:
+        """Make one Memory entry's eligibility match the DAG without adding a revision.
+
+        ``forget`` / ``reactivate`` only rewrite the manifest state, so an entry that
+        already matches costs nothing and a successful event replay stays a no-op.
+        """
+
+        async with self._context(scope_id) as context, self._locked(scope_id):
+            service = context.artifacts.memory
+            _validate_memory_identity(context.artifacts.memory_artifact_id, citation.memory_ref)
+            memory = await service.revision(citation.memory_ref)
+            entry = await _cited_entry(service, memory, citation)
+            head = await _head_or_none(service, context.artifacts.memory_artifact_id)
+            if head is None:
+                raise SourceLifecycleError("memory is not available")
+            current = next(
+                (item for item in await service.entries(head) if item.entry_id == entry.entry_id),
+                None,
+            )
+            if current is None or current.entry_version_id != entry.entry_version_id:
+                raise SourceLifecycleError("memory citation does not match the current entry")
+            updated = (
+                await service.reactivate(head, entries=(current,), reason=LIFECYCLE_REASON)
+                if available
+                else await service.forget(head, entries=(current,), reason=LIFECYCLE_REASON)
+            )
+            return updated.as_ref()
+
+    async def _lifecycle_topic_probe(self, scope_id: str, reference: ArtifactRef | None) -> None:
+        """Validate one Topic revision, or refresh which Topics currently lack support."""
+
+        if reference is not None:
+            record = await self._records().get_artifact_revision(
+                scope_id,
+                reference.family,
+                reference.artifact_id,
+                reference.revision,
+            )
+            if record.artifact_id != reference.artifact_id:
+                raise SourceLifecycleError("topic reference does not resolve")
+            return
+        await self._ensure_lifecycle_schema()
+        async with self._records()._database.transaction() as connection:
+            stored = await self._lifecycle_registrations(connection, scope_id)
+            available = await self._lifecycle_availability(connection, scope_id, stored)
+        withdrawn = frozenset(
+            node.reference
+            for node in stored.values()
+            if node.family == "topic" and not available.get(node.node_id, False)
+        )
+        self._lifecycle_record_topics(scope_id, withdrawn)
+
+    async def _lifecycle_registrations(self, connection: Any, scope_id: str) -> dict[str, Any]:
+        from powercontext.builtin.runtime import source_lifecycle as module
+
+        return await module.load_registrations(connection, scope_id)
+
+    async def _lifecycle_availability(
+        self,
+        connection: Any,
+        scope_id: str,
+        stored: dict[str, Any],
+    ) -> dict[str, bool]:
+        from powercontext.builtin.runtime import source_lifecycle as module
+
+        return await module.load_availability(connection, scope_id, stored)
+
+    def _lifecycle_cache_cold(self, scope_id: str) -> bool:
+        """Report whether this Runtime has not yet derived the Topic eligibility set."""
+
+        return scope_id not in self._lifecycle_topic_ready_scopes
+
+    def _lifecycle_withdrawn_topics(self, scope_id: str) -> frozenset[str]:
+        return self._lifecycle_withdrawn_topic_ids.get(scope_id, frozenset())
+
+    def _lifecycle_record_topics(self, scope_id: str, withdrawn: frozenset[str]) -> None:
+        self._lifecycle_topic_ready_scopes.add(scope_id)
+        if withdrawn:
+            self._lifecycle_withdrawn_topic_ids[scope_id] = withdrawn
+        else:
+            self._lifecycle_withdrawn_topic_ids.pop(scope_id, None)
 
     async def __aenter__(self) -> BuiltinRuntime:
         return self
@@ -3688,6 +3891,17 @@ async def _cited_entry(
     ):
         raise MemoryEntryNotFoundError(citation.entry_id)
     return await service.validate_citation(citation)
+
+
+# Reason recorded on the Memory transition that a Source lifecycle event causes, so the
+# change log shows why an entry left (or returned to) the retrievable set.
+LIFECYCLE_REASON = "source-lifecycle"
+
+
+def _topic_key(reference: ArtifactRef) -> str:
+    """Stable key for one Topic Artifact revision as recorded by the lifecycle DAG."""
+
+    return reference.model_dump_json()
 
 
 def _entry_record(memory: Memory, entry: MemoryEntryVersion) -> MemoryEntryRecord:

@@ -28,6 +28,7 @@ from powercontext.builtin.artifacts.memory.models import MemoryCitation, MemoryH
 from powercontext.builtin.artifacts.profile.models import Profile
 from powercontext.builtin.artifacts.topic_memory import TopicMemory, TopicMemorySearchHit
 from powercontext.builtin.runtime.errors import PreparedContextInvariantError
+from powercontext.builtin.runtime.evidence import EvidenceFragment, MemoryEntryAddress, select_evidence
 from powercontext.builtin.runtime.models import PrepareContextRequest, PreparedContext
 from powercontext.builtin.runtime.prepared_code import (
     CodeEvidenceRef,
@@ -106,15 +107,7 @@ class PreparedContextBuild:
     origins: tuple[PreparedContextOrigin, ...]
     omissions: PreparedContextOmissions = PreparedContextOmissions()
     code_origins: tuple[CodeEvidenceRef, ...] = ()
-
-
-@dataclass(frozen=True)
-class MemoryEntryAddress:
-    """Identify one exact Memory entry version across Scope boundaries."""
-
-    memory: ArtifactAddress
-    entry_id: str
-    entry_version_id: str
+    fragments: tuple[EvidenceFragment, ...] = ()
 
 
 PreparedContextOrigin = MemoryCitation | ArtifactRef | MemoryEntryAddress | ArtifactAddress
@@ -239,7 +232,7 @@ class PreparedContextBuilder:
         if sum(len(candidates.hits) for candidates in experience_candidates) > self.experience_candidate_limit:
             raise PreparedContextInvariantError("experience-candidate-limit")
 
-        content, origins, omissions = self._select_entries(
+        content, origins, omissions, fragments = self._select_entries(
             request=request,
             current_scope_id=current_scope_id,
             memory_candidates=memory_candidates,
@@ -258,6 +251,7 @@ class PreparedContextBuilder:
             context=PreparedContext(status="ready", content=content, content_bytes=content_bytes),
             origins=origins,
             omissions=omissions,
+            fragments=fragments,
         )
 
     def probe_budget(
@@ -281,7 +275,7 @@ class PreparedContextBuilder:
         counters because both go through :meth:`_select_entries`.
         """
 
-        content, origins, omissions = self._select_entries(
+        content, origins, omissions, _ = self._select_entries(
             request=request,
             current_scope_id=current_scope_id,
             memory_candidates=memory_candidates,
@@ -307,17 +301,19 @@ class PreparedContextBuilder:
         topic_memory_hits: Sequence[TopicMemorySearchHit],
         experience_candidates: Sequence[PreparedExperienceCandidates],
         profile_candidates: Sequence[PreparedProfileCandidate],
-    ) -> tuple[str | None, tuple[PreparedContextOrigin, ...], PreparedContextOmissions]:
+    ) -> tuple[str | None, tuple[PreparedContextOrigin, ...], PreparedContextOmissions, tuple[EvidenceFragment, ...]]:
         """Run one complete pure selection pass and render it.
 
-        Returns ``(content, origins, omissions)``; ``content`` is ``None`` exactly when nothing
-        was selected, which is the empty-result case for both paths. This is the single
-        selection path shared by :meth:`build_scopes_result` and :meth:`probe_budget`, so the
-        probe's counters always describe the selection the build would actually perform.
+        Returns ``(content, origins, omissions, fragments)``; ``content`` is ``None`` exactly
+        when nothing was selected, which is the empty-result case for both paths.
+        ``fragments`` is non-empty only under ``evidence_selection``, where the body is built
+        from verbatim spans instead of entry prefixes. This is the single selection path
+        shared by :meth:`build_scopes_result` and :meth:`probe_budget`, so the probe's counters
+        always describe the selection the build would actually perform.
         """
 
         if request.assembly is not None:
-            return self._select_text(
+            content, origins, omissions = self._select_text(
                 request,
                 current_scope_id=current_scope_id,
                 memory_candidates=memory_candidates,
@@ -325,6 +321,7 @@ class PreparedContextBuilder:
                 profile_candidates=profile_candidates,
                 topic_memory_hits=topic_memory_hits,
             )
+            return content, origins, omissions, ()
 
         memory_entries = tuple(
             entry
@@ -335,6 +332,24 @@ class PreparedContextBuilder:
                 scope_id=None if candidates.scope_id == current_scope_id else candidates.scope_id or None,
             )
         )
+        if request.evidence_selection:
+            # Selection replaces the whole body: the caller asked for the query-bearing
+            # spans rather than the first bytes of each entry, so the prefix path would
+            # deliver exactly what the mode exists to avoid.
+            selection = select_evidence(
+                memory_entries,
+                query=request.query,
+                scope_id=current_scope_id or "",
+                max_bytes=request.max_bytes,
+            )
+            if not selection.fragments:
+                return None, (), PreparedContextOmissions(), ()
+            return (
+                selection.content,
+                tuple(fragment.address for fragment in selection.fragments),
+                PreparedContextOmissions(),
+                selection.fragments,
+            )
         topic_memory_entries = sorted(
             self._topic_memory_entries(topic_memory_hits),
             key=_stable_entry_key,
@@ -353,13 +368,13 @@ class PreparedContextBuilder:
         )[: self.experience_entry_limit]
         entries, omissions = self._fit_entries(request, memory_entries, topic_memory_entries, experience_entries)
         if not entries:
-            return None, (), omissions
+            return None, (), omissions, ()
         # Render in selection order, never in identity order.  Entry identities are random
         # uuids, so sorting by them permutes the body and drops every new Memory entry at a
         # random offset - an incremental delta then has to resend everything after it.  The
         # pooled candidates arrive in first-seen order, which only ever grows at the tail,
         # so keeping that order is what makes the body prefix-stable across rounds.
-        return _render(entries), tuple(entry.origin for entry in entries), omissions
+        return _render(entries), tuple(entry.origin for entry in entries), omissions, ()
 
     def _select_text(
         self,
@@ -406,10 +421,19 @@ class PreparedContextBuilder:
                     )
                 )
                 entries = tuple(chain.from_iterable(_interleave_groups(groups)))
+            if section.family in {"memory", "experience"}:
+                # Rank decides which entries the budget can afford; identity decides where
+                # they sit. Sorting the candidates outright would let a permuted body pick a
+                # different survivor set whenever the budget is tight, so the layout is
+                # applied to the selection instead of to the candidate order.
+                layout = True
+            else:
+                layout = False
             seen: set[tuple[str, str, str, int, str | None, str | None]] = set()
             rank = 0
             selected_count = 0
-            for entry in entries:
+            selected: list[tuple[int, _PreparedContextEntry]] = []
+            for position, entry in enumerate(entries):
                 if selected_count >= limit:
                     break
                 item = _text_item(entry)
@@ -425,8 +449,21 @@ class PreparedContextBuilder:
                 if identity in seen or not item.content.strip():
                     continue
                 seen.add(identity)
+                selected.append((position, entry))
+                selected_count += 1
+            if layout:
+                # Within one layout, the entry the query actually matched leads: identity
+                # only breaks ties between equally relevant entries, so a tight budget never
+                # spends itself on filler before reaching the answer.
+                selected.sort(key=lambda pair: (pair[0], _stable_entry_key(pair[1])))
+            for _, entry in selected:
                 rank += 1
-                outcome = fit_context_text_item(included, replace(item, recall_rank=rank), assembly, request.max_bytes)
+                outcome = fit_context_text_item(
+                    included,
+                    replace(_text_item(entry), recall_rank=rank),
+                    assembly,
+                    request.max_bytes,
+                )
                 if outcome.item is None:
                     dropped_below_min_bytes += int(outcome.dropped_below_min_bytes)
                     dropped_no_fitting_truncation += int(outcome.dropped_no_fitting_truncation)
@@ -434,7 +471,6 @@ class PreparedContextBuilder:
                 fitted = outcome.item
                 included.append(fitted)
                 origins.append(entry.origin)
-                selected_count += 1
                 truncated_items += int(fitted.truncated)
         omissions = PreparedContextOmissions(
             truncated_items=truncated_items,
@@ -709,6 +745,8 @@ def _stable_entry_key(entry: _PreparedContextEntry) -> tuple[int, str, str, int]
 
     origin = entry.origin
     if isinstance(origin, MemoryCitation):
+        return (0, origin.entry_id, origin.entry_version_id, 0)
+    if isinstance(origin, MemoryEntryAddress):
         return (0, origin.entry_id, origin.entry_version_id, 0)
     ref = origin.artifact if isinstance(origin, ArtifactAddress) else origin
     return (_FAMILY_RENDER_ORDER.get(ref.family, 4), ref.artifact_id, "", ref.revision)
