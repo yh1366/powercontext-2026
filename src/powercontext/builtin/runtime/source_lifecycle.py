@@ -372,7 +372,12 @@ class SourceLifecycleService:
                     )
                     if not same:
                         raise SourceLifecycleError("sequence already recorded with different content")
-                    # Replaying a recorded event changes nothing and adds no revisions.
+                    # Replaying a recorded event adds no Memory revision, but the event
+                    # row is committed before the native projection runs. If an earlier
+                    # attempt died between those two steps, the recorded event is all the
+                    # retry has left to work with, so reconcile again: the projection is a
+                    # no-op when the native state already matches.
+                    await self._reconcile(connection, stored)
                     return _active_ids(await self._available(connection, stored))
                 if event.sequence <= latest:
                     raise SourceLifecycleError("sequence must increase monotonically")
