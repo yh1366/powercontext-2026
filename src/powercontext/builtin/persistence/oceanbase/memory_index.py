@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from pyobvector import VECTOR, VectorIndex
 from sqlalchemy import (
     BigInteger,
@@ -148,6 +150,54 @@ WHERE m.scope_id = :scope_id
 {TAG_VECTOR}
 ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE
 LIMIT :candidate_limit)
+"""
+
+# Fallback statements used only when the combined statement is rejected by the
+# server.  Serving the two channels separately and merging the already-ordered
+# runs in the application keeps hybrid search working on servers whose UNION
+# dialect quirks differ, instead of failing the whole recall.
+_OCEANBASE_FTS_CHANNEL_SQL = """
+SELECT 'fts' AS channel,
+    f.memory_artifact_id,
+    f.head_revision,
+    f.entry_id,
+    f.entry_version_id,
+    vf.text,
+    NULL AS distance
+FROM pc_memory_entry_heads AS f
+JOIN pc_memory_entry_versions AS vf
+  ON vf.scope_id = f.scope_id
+ AND vf.memory_artifact_id = f.memory_artifact_id
+ AND vf.entry_version_id = f.entry_version_id
+WHERE f.scope_id = :scope_id
+  AND f.memory_artifact_id IN :memory_artifact_ids
+  AND MATCH (f.searchable_text) AGAINST (:analyzed_query IN NATURAL LANGUAGE MODE)
+{TAG_FTS}
+ORDER BY MATCH (f.searchable_text) AGAINST (:analyzed_query IN NATURAL LANGUAGE MODE) DESC,
+    f.memory_artifact_id,
+    f.entry_id,
+    f.entry_version_id
+LIMIT :candidate_limit
+"""
+
+_OCEANBASE_VECTOR_CHANNEL_SQL = """
+SELECT 'vector' AS channel,
+    m.memory_artifact_id,
+    m.head_revision,
+    m.entry_id,
+    m.entry_version_id,
+    vm.text,
+    l2_distance(m.embedding, :query_vector) AS distance
+FROM pc_memory_vector_entries AS m
+JOIN pc_memory_entry_versions AS vm
+  ON vm.scope_id = m.scope_id
+ AND vm.memory_artifact_id = m.memory_artifact_id
+ AND vm.entry_version_id = m.entry_version_id
+WHERE m.scope_id = :scope_id
+  AND m.memory_artifact_id IN :memory_artifact_ids
+{TAG_VECTOR}
+ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE
+LIMIT :candidate_limit
 """
 
 
@@ -606,6 +656,28 @@ class OceanBaseMemoryHybridIndex:
                 "tag_hashes": bindparam("tag_hashes", expanding=True),
             },
         )
+        # The FTS-only statement has no :query_vector placeholder, so it must not
+        # receive that bind parameter at construction time.
+        fts_parameters = {"memory_artifact_ids": parameters["memory_artifact_ids"]}
+        self._fts_only_sql = text(_OCEANBASE_FTS_CHANNEL_SQL.format(TAG_FTS="")).bindparams(**fts_parameters)
+        self._tagged_fts_only_sql = text(_OCEANBASE_FTS_CHANNEL_SQL.format(TAG_FTS=memory_tag_sql("f"))).bindparams(
+            **fts_parameters,
+            **{
+                "tag_keys": bindparam("tag_keys", expanding=True),
+                "tag_hashes": bindparam("tag_hashes", expanding=True),
+            },
+        )
+        self._vector_only_sql = text(_OCEANBASE_VECTOR_CHANNEL_SQL.format(TAG_VECTOR="")).bindparams(**parameters)
+        self._tagged_vector_only_sql = text(
+            _OCEANBASE_VECTOR_CHANNEL_SQL.format(TAG_VECTOR=memory_tag_sql("m"))
+            .replace("ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE", "ORDER BY l2_distance(m.embedding, :query_vector)")
+        ).bindparams(
+            **parameters,
+            **{
+                "tag_keys": bindparam("tag_keys", expanding=True),
+                "tag_hashes": bindparam("tag_hashes", expanding=True),
+            },
+        )
 
     async def initialize(self, connection: AsyncConnection, /) -> None:
         await self._fts.initialize(connection)
@@ -695,26 +767,49 @@ class OceanBaseMemoryHybridIndex:
             raise CapabilityNotSupportedError("embedding-profile")
         if not await self._vector.vector_complete(connection, scope_id, request.memories, self.profile):
             raise CapabilityNotSupportedError("vector")
-        rows = (
-            (
-                await connection.execute(
-                    self._search_sql if request.tag_filter is None else self._tagged_search_sql,
-                    {
-                        "scope_id": scope_id,
-                        "memory_artifact_ids": tuple(memory.artifact_id for memory in request.memories),
-                        "analyzed_query": request.analyzed_query,
-                        "query_vector": validate_embedding(
-                            request.query_vector,
-                            dimension=self.profile.dimension,
-                        ),
-                        "candidate_limit": request.candidate_limit,
-                        **memory_tag_parameters(request.tag_filter),
-                    },
+        params = {
+            "scope_id": scope_id,
+            "memory_artifact_ids": tuple(memory.artifact_id for memory in request.memories),
+            "analyzed_query": request.analyzed_query,
+            "query_vector": validate_embedding(
+                request.query_vector,
+                dimension=self.profile.dimension,
+            ),
+            "candidate_limit": request.candidate_limit,
+            **memory_tag_parameters(request.tag_filter),
+        }
+        try:
+            rows = (
+                (
+                    await connection.execute(
+                        self._search_sql if request.tag_filter is None else self._tagged_search_sql,
+                        params,
+                    )
                 )
+                .mappings()
+                .all()
             )
-            .mappings()
-            .all()
-        )
+        except CapabilityNotSupportedError:
+            raise
+        except Exception as error:
+            logging.getLogger(__name__).warning(
+                "hybrid search statement rejected; falling back to per-channel statements",
+                exc_info=error,
+            )
+            fts_params = {key: value for key, value in params.items() if key != "query_vector"}
+            fts_rows = (
+                await connection.execute(
+                    self._fts_only_sql if request.tag_filter is None else self._tagged_fts_only_sql,
+                    fts_params,
+                )
+            ).mappings().all()
+            vector_rows = (
+                await connection.execute(
+                    self._vector_only_sql if request.tag_filter is None else self._tagged_vector_only_sql,
+                    params,
+                )
+            ).mappings().all()
+            rows = [*fts_rows, *vector_rows]
         # UNION ALL keeps each branch's own ORDER BY and LIMIT, so the rows arrive as
         # two already-ordered runs; split them back into channels without re-sorting.
         fts_rows = [row for row in rows if str(row["channel"]) == "fts"]

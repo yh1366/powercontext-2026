@@ -955,6 +955,9 @@ class ScopedContextApplication:
         if base_pack is None:
             return pack
 
+        if isinstance(base_pack, str):
+            # A receiver that kept only the wire text should not have to encode by hand.
+            base_pack = ContextPack.from_bytes(base_pack.encode("utf-8"))
         if isinstance(base_pack, (bytes, bytearray, memoryview)):
             # A receiver that only kept the wire form should not have to decode by hand.
             base_pack = ContextPack.from_bytes(bytes(base_pack))

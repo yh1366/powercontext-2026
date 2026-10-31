@@ -443,9 +443,8 @@ def _page_text(reader: PdfReader, index: int) -> str:
     try:
         page = reader.pages[index]
         extracted = page.extract_text(extraction_mode="plain")
-    except Exception as error:
-        message = f"pdf page {index + 1} cannot be extracted"
-        raise ValueError(message) from error
+    except Exception:
+        return ""
     return _clean_text(extracted or "")
 
 
