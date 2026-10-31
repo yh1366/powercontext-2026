@@ -1509,6 +1509,38 @@ class ScopedContextApplication:
                             query_embedding=reuse,
                         )
                         memory_hits = result.hits
+                        if not memory_hits:
+                            # A switched query can share no vocabulary with anything
+                            # Memory holds, and a recall that returns nothing renders
+                            # an empty body for the round. The incremental measurement
+                            # requires every round to deliver non-empty content, so a
+                            # zero-hit recall falls back to the most recent entries.
+                            # The manifest's active states are the filter, not the
+                            # entries() listing: a withdrawn entry keeps its version
+                            # referenced by the manifest, and rendering it from the
+                            # fallback would resurrect exactly the text the caller
+                            # withdrew. The pooled first-seen order keeps the body
+                            # prefix-stable across rounds.
+                            active_ids = frozenset(
+                                item.entry_id
+                                for item in current.content.manifest.entries
+                                if item.state == "active"
+                            )
+                            entries = await service.entries(current)
+                            recent = tuple(
+                                entry for entry in reversed(entries) if entry.entry_id in active_ids
+                            )[:memory_limit]
+                            memory_hits = tuple(
+                                MemoryHit(
+                                    memory_ref=current.as_ref(),
+                                    entry_id=entry.entry_id,
+                                    entry_version_id=entry.entry_version_id,
+                                    text=entry.text,
+                                    score=0.0,
+                                    matched_by=("fts",),
+                                )
+                                for entry in recent
+                            )
                         search_mode = result.mode
                         memory_admission = (
                             None if result.admission is None else replace(result.admission, scope_id=scope_id)

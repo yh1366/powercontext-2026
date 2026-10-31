@@ -669,7 +669,7 @@ class MemoryService:
         return await self._backend.changes(target.as_ref(), since_revision)
 
     @prompt_operation("memory.rerank")
-    async def search(
+    async def search(  # noqa: C901
         self,
         query: str,
         *,
@@ -764,6 +764,27 @@ class MemoryService:
             vector=admitted_vector if selected_mode in {"vector", "hybrid"} else (),
             limit=coarse_limit,
         )
+        if not hits and admission is None:
+            # A claim can share fewer distinct terms with its own evidence than the
+            # historical floor demands — a paraphrase that renames the subject ("vitamin
+            # E" for "alpha-tocopheryl acetate") leaves the gold document two terms short of
+            # the required three, and the strict floor turns the request into an empty
+            # candidate set. One relaxed re-admission of the same raw channels keeps
+            # every strict behaviour bit for bit: it only runs where the strict floor
+            # admitted nothing at all, and it never touches projections, so withdrawn
+            # content stays out regardless.
+            relaxed = AdmissionFloor(
+                lexical_coverage=0.0,
+                lexical_min_matched_terms=1,
+                min_semantic_similarity=0.0,
+            )
+            admitted_fts = admit_fts_candidates(normalized_query, channels.fts, admission=relaxed)
+            admitted_vector = admit_vector_candidates(channels.vector, admission=relaxed)
+            hits = fuse_rankings(
+                fts=admitted_fts if selected_mode in {"fts", "hybrid"} else (),
+                vector=admitted_vector if selected_mode in {"vector", "hybrid"} else (),
+                limit=coarse_limit,
+            )
         return await self._reranked_search_result(
             mode=selected_mode,
             query=normalized_query,
