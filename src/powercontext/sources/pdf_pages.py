@@ -313,6 +313,7 @@ async def search_pdf_pages(
     )
     fused = {hit.entry_id: rank for rank, hit in enumerate(ranking.hits)}
     ranked = _rank(pages, terms, fused)
+    ranked = _focus_document(ranked, limit)
     wanted_statements = _wanted_statements(question)
     if wanted_statements:
         # The metric question and the statement that answers it share almost no
@@ -342,6 +343,8 @@ class _Page:
     citation: MemoryCitation
     profile: _Profile
     document_keys: frozenset[str]
+    # Which document this page was projected from; a scoped Memory can hold several.
+    document: str = ""
 
 
 @dataclass
@@ -619,6 +622,9 @@ async def _pages(memory, terms: tuple[_Term, ...], request_class) -> tuple[_Page
         if len(result.hits) == signature:
             return pages
 
+    # Key on the projected page text, not the entry id: re-capturing the same
+    # revision stores the same page under a fresh entry id, and a question must
+    # still map to one citation per physical page.
     observed: dict[str, object] = {}
     signature = 0
     for index, probe in enumerate(_CORPUS_PROBES):
@@ -626,19 +632,20 @@ async def _pages(memory, terms: tuple[_Term, ...], request_class) -> tuple[_Page
         if index == 0:
             signature = len(result.hits)
         for hit in result.hits:
-            observed.setdefault(hit.entry_id, hit)
+            observed.setdefault(hit.text, hit)
     if len(observed) < _MIN_COLLECTION:
         for term in terms[:_MAX_TERM_QUERIES]:
             for query in _term_queries(term):
                 result = await _search(memory, request_class, query, _CANDIDATE_PER_QUERY)
                 for hit in result.hits:
-                    observed.setdefault(hit.entry_id, hit)
+                    observed.setdefault(hit.text, hit)
 
     pages = tuple(
         _Page(
             citation=_citation_of(hit),
             profile=_profile(hit.text),
             document_keys=frozenset(_key(token) for token in _TEXT_TOKEN.findall(_document_of(hit.text))),
+            document=_document_of(hit.text),
         )
         for hit in observed.values()
     )
@@ -717,6 +724,27 @@ def _rank(  # noqa: C901
         scored.append((score, order, page))
     scored.sort(key=lambda item: (-item[0], item[1]))
     return [page for _score, _order, page in scored]
+
+
+def _focus_document(ranked: list[_Page], limit: int) -> list[_Page]:
+    """Answer from the single document the ranking put first.
+
+    One scoped Memory can hold several report revisions. Twenty pages spread over
+    five documents spend four pages of the right statement next to sixteen pages of
+    the wrong one; the same twenty pages of the leading document carry the evidence.
+    Documents therefore only mix when the leading one cannot fill the limit.
+    """
+
+    if not ranked or limit < 1:
+        return ranked
+    groups: dict[str, list[_Page]] = {}
+    for page in ranked:
+        key = page.document or page.citation.entry_id
+        groups.setdefault(key, []).append(page)
+    if len(groups) < 2:
+        return ranked
+    leading = groups[ranked[0].document or ranked[0].citation.entry_id]
+    return leading if len(leading) >= limit else ranked
 
 
 def _key_sequence(text: str) -> tuple[str, ...]:
