@@ -23,10 +23,15 @@ DELTA_SCHEMA = "powercontext.context-pack-delta.v1"
 # change are resent anyway.  Content-defined chunking anchors boundaries on the bytes
 # themselves: an insertion only re-chunks a local neighbourhood and the stream re-synchronises
 # within roughly one average chunk, which is what the transfer-cost gate measures.
+#
+# The average is deliberately small. The body ends with the Memory revision number, so the
+# tail rewrites every round even when no entry changed; at 512-byte chunks that tail change
+# replaced a whole chunk and the delta carried a large slice of the body. At ~128 bytes the
+# resent region shrinks with it, and the extra per-chunk JSON costs only a few bytes each.
 INCREMENTAL_CHUNK_BYTES = 2048
-_CHUNK_AVERAGE_BITS = 9
+_CHUNK_AVERAGE_BITS = 7
 _CHUNK_AVERAGE = 1 << _CHUNK_AVERAGE_BITS  # geometric mean distance between boundaries
-_CHUNK_MIN_BYTES = 64
+_CHUNK_MIN_BYTES = 32
 _PACK_FIELDS = frozenset({"schema", "items", "digest", "byte_count"})
 _DELTA_FIELDS = frozenset({"schema", "base_digest", "target_digest", "prefix_items", "appended"})
 

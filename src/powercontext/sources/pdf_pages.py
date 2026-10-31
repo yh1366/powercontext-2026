@@ -313,6 +313,16 @@ async def search_pdf_pages(
     )
     fused = {hit.entry_id: rank for rank, hit in enumerate(ranking.hits)}
     ranked = _rank(pages, terms, fused)
+    wanted_statements = _wanted_statements(question)
+    if wanted_statements:
+        # The metric question and the statement that answers it share almost no
+        # vocabulary, so lexical ranking alone leaves the statement page far outside the
+        # returned pages. Leading with the statement pages makes the evidence reachable;
+        # everything else keeps the order the ranking gave it.
+        primary = [page for page in ranked if page.profile.statement in wanted_statements][:_STATEMENT_INJECT]
+        if primary:
+            chosen = {id(page) for page in primary}
+            ranked = [*primary, *(page for page in ranked if id(page) not in chosen)]
     return tuple(page.citation for page in ranked[:limit])
 
 
@@ -342,6 +352,8 @@ class _Profile:
     sequence: list[str] = field(default_factory=list)
     heading_keys: set[str] = field(default_factory=set)
     length: int = 0
+    # Which primary financial statement this page carries, when it carries one.
+    statement: str | None = None
 
 
 class PDFPageSourceAdapter:
@@ -743,7 +755,57 @@ def _profile(text: str) -> _Profile:
         key = _key(token)
         counts[key] += 1
         sequence.append(key)
-    return _Profile(counts=counts, sequence=sequence, heading_keys=_heading_keys(text), length=len(tokens))
+    return _Profile(
+        counts=counts,
+        sequence=sequence,
+        heading_keys=_heading_keys(text),
+        length=len(tokens),
+        statement=_statement(text),
+    )
+
+
+# A metric question and the statement that answers it share almost no wording: "did
+# the quick ratio improve" is answered by a balance sheet that never says "quick
+# ratio". Ranking alone therefore buries the statement page far below dozens of
+# narrative pages, so the page's statement is a first-class retrieval signal.
+_STATEMENT_HEADERS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("balance", re.compile(r"consolidated\s+balance\s+sheet")),
+    ("income", re.compile(r"consolidated\s+statements?\s+of\s+(income|operations)")),
+    ("cash", re.compile(r"consolidated\s+statements?\s+of\s+cash\s+flow")),
+)
+# Every report page repeats the running header "Table of Contents", so a heading match
+# alone also fires on the contents page, which lists titles and page numbers instead of
+# figures. Currency amounts are what a statement has and a contents page does not.
+_STATEMENT_AMOUNT = re.compile(r"[$€£¥]")
+_STATEMENT_STEMS: dict[str, frozenset[str]] = {
+    "balance": frozenset({"quick", "curren", "ratio", "liquid", "asset", "liabil", "equity", "workin", "capita"}),
+    "income": frozenset({"margin", "revenu", "income", "expens", "tax", "gross", "operat", "profit", "sales"}),
+    "cash": frozenset({"flow", "capex", "expend", "deprec", "amorti"}),
+}
+# Promoting a statement's pages is enough to reach the primary table and its
+# continuations while leaving the lexical ranking intact behind them. Three pages in
+# total covers a table that spans a page break without pushing the pages the lexical
+# ranking found on its own out of the returned window.
+_STATEMENT_INJECT = 3
+
+
+def _statement(text: str) -> str | None:
+    """Return the primary financial statement a page carries, if any."""
+
+    if not _STATEMENT_AMOUNT.search(text[:2000]):
+        return None
+    head = text[:600].casefold()
+    for name, pattern in _STATEMENT_HEADERS:
+        if pattern.search(head):
+            return name
+    return None
+
+
+def _wanted_statements(question: str) -> frozenset[str]:
+    """Return the statements a question's metric wording points at."""
+
+    stems = {token[:6] for token in _TEXT_TOKEN.findall(question.casefold())}
+    return frozenset(name for name, words in _STATEMENT_STEMS.items() if stems & words)
 
 
 def _heading_keys(text: str) -> set[str]:

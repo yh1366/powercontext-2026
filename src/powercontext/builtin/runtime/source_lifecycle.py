@@ -44,16 +44,16 @@ from powercontext.builtin.persistence.database import AsyncDatabase
 from powercontext.sources import SourceRef
 
 __all__ = [
-    "create_lifecycle_schema",
-    "load_registrations",
-    "load_availability",
-    "lifecycle_service",
+    "ScopedSourceLifecycleApplication",
+    "SourceLifecycleApplication",
     "SourceLifecycleError",
     "SourceLifecycleEvent",
-    "lifecycle_schema",
     "SourceLifecycleService",
-    "SourceLifecycleApplication",
-    "ScopedSourceLifecycleApplication",
+    "create_lifecycle_schema",
+    "lifecycle_schema",
+    "lifecycle_service",
+    "load_availability",
+    "load_registrations",
 ]
 
 _REGISTRATION_TABLE = "source_lifecycle_registration"
@@ -346,53 +346,52 @@ class SourceLifecycleService:
     async def apply(self, event: SourceLifecycleEvent) -> list[str]:
         if not isinstance(event, SourceLifecycleEvent):
             raise SourceLifecycleError("event must be a SourceLifecycleEvent")
-        async with self._atomic_scope():
-            async with self._database.transaction() as connection:
-                stored = await self._registrations(connection)
-                registration = stored.get(event.node_id)
-                if registration is None or registration.family != "source":
-                    raise SourceLifecycleError(f"unknown source {event.node_id}")
-                if registration.revision != event.revision:
-                    raise SourceLifecycleError("revision does not match the registered Source")
-                history = (
-                    await connection.execute(
-                        select(_events.c.sequence, _events.c.revision, _events.c.available, _events.c.reason).where(
-                            _events.c.scope_id == self.scope_id, _events.c.node_id == event.node_id
-                        )
-                    )
-                ).all()
-                latest = max((row.sequence for row in history), default=0)
-                for row in history:
-                    if row.sequence != event.sequence:
-                        continue
-                    same = (
-                        row.revision == event.revision
-                        and (row.available == "true") == event.available
-                        and row.reason == event.reason
-                    )
-                    if not same:
-                        raise SourceLifecycleError("sequence already recorded with different content")
-                    # Replaying a recorded event adds no Memory revision, but the event
-                    # row is committed before the native projection runs. If an earlier
-                    # attempt died between those two steps, the recorded event is all the
-                    # retry has left to work with, so reconcile again: the projection is a
-                    # no-op when the native state already matches.
-                    await self._reconcile(connection, stored)
-                    return _active_ids(await self._available(connection, stored))
-                if event.sequence <= latest:
-                    raise SourceLifecycleError("sequence must increase monotonically")
+        async with self._atomic_scope(), self._database.transaction() as connection:
+            stored = await self._registrations(connection)
+            registration = stored.get(event.node_id)
+            if registration is None or registration.family != "source":
+                raise SourceLifecycleError(f"unknown source {event.node_id}")
+            if registration.revision != event.revision:
+                raise SourceLifecycleError("revision does not match the registered Source")
+            history = (
                 await connection.execute(
-                    insert(_events).values(
-                        scope_id=self.scope_id,
-                        node_id=event.node_id,
-                        sequence=event.sequence,
-                        revision=event.revision,
-                        available="true" if event.available else "false",
-                        reason=event.reason,
+                    select(_events.c.sequence, _events.c.revision, _events.c.available, _events.c.reason).where(
+                        _events.c.scope_id == self.scope_id, _events.c.node_id == event.node_id
                     )
                 )
+            ).all()
+            latest = max((row.sequence for row in history), default=0)
+            for row in history:
+                if row.sequence != event.sequence:
+                    continue
+                same = (
+                    row.revision == event.revision
+                    and (row.available == "true") == event.available
+                    and row.reason == event.reason
+                )
+                if not same:
+                    raise SourceLifecycleError("sequence already recorded with different content")
+                # Replaying a recorded event adds no Memory revision, but the event
+                # row is committed before the native projection runs. If an earlier
+                # attempt died between those two steps, the recorded event is all the
+                # retry has left to work with, so reconcile again: the projection is a
+                # no-op when the native state already matches.
                 await self._reconcile(connection, stored)
                 return _active_ids(await self._available(connection, stored))
+            if event.sequence <= latest:
+                raise SourceLifecycleError("sequence must increase monotonically")
+            await connection.execute(
+                insert(_events).values(
+                    scope_id=self.scope_id,
+                    node_id=event.node_id,
+                    sequence=event.sequence,
+                    revision=event.revision,
+                    available="true" if event.available else "false",
+                    reason=event.reason,
+                )
+            )
+            await self._reconcile(connection, stored)
+            return _active_ids(await self._available(connection, stored))
 
     async def _available(self, connection, stored: dict[str, _Registration]) -> dict[str, bool]:
         return await load_availability(connection, self.scope_id, stored)

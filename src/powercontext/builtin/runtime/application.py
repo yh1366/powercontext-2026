@@ -221,12 +221,6 @@ from powercontext.builtin.runtime.prepared_context import (
     PreparedMemoryCandidates,
     PreparedProfileCandidate,
 )
-from powercontext.builtin.runtime.source_lifecycle import (
-    SourceLifecycleApplication,
-    SourceLifecycleError,
-    SourceLifecycleService,
-    create_lifecycle_schema,
-)
 from powercontext.builtin.runtime.protocols import (
     BuiltinTriggers,
     PowerContextProvider,
@@ -253,6 +247,12 @@ from powercontext.builtin.runtime.recall_sufficiency import (
     RecallSufficiencyPolicy,
     build_recall_candidates,
     recall_effort,
+)
+from powercontext.builtin.runtime.source_lifecycle import (
+    SourceLifecycleApplication,
+    SourceLifecycleError,
+    SourceLifecycleService,
+    create_lifecycle_schema,
 )
 from powercontext.builtin.runtime.statistics import RelationalScopedStatistics, overview_selection
 from powercontext.builtin.scope import ScopeApplication, ScopeDescriptor, ScopeSelection
@@ -847,6 +847,8 @@ class ScopedContextApplication:
     def _merge_memory_candidates(
         self,
         candidates: Sequence[PreparedMemoryCandidates],
+        *,
+        active_entry_ids: frozenset[str] | None = None,
     ) -> list[PreparedMemoryCandidates]:
         """Pool recalled Memory hits per scope and order them by first appearance.
 
@@ -855,11 +857,20 @@ class ScopedContextApplication:
         them. Every pooled hit is reported against the artifact's current revision
         so the rendered citations share one revision and the envelope can carry it
         once instead of per item.
+
+        ``active_entry_ids`` is the current head's live entry set. A forgotten or
+        superseded entry no longer appears in a recall, but it is still in the pool,
+        so without this check a plain forget would keep rendering the very text the
+        caller just withdrew. The first-seen index is kept on purpose: if the entry
+        comes back, it returns to the position the receiver already knows.
         """
 
         merged: list[PreparedMemoryCandidates] = []
         for group in candidates:
             pool, first_seen = self._runtime._context_memory_pool(group.scope_id)
+            if active_entry_ids is not None:
+                for entry_id in [item for item in pool if item not in active_entry_ids]:
+                    del pool[entry_id]
             for hit in group.hits:
                 if hit.entry_id not in first_seen:
                     first_seen[hit.entry_id] = len(first_seen)
@@ -880,6 +891,30 @@ class ScopedContextApplication:
                 )
             )
         return merged
+
+    async def _active_memory_entry_ids(self) -> frozenset[str] | None:
+        """Return the entry ids the current Memory head still references.
+
+        The first-seen pool survives across preparations, so it has to be reconciled
+        with the head before it is rendered: an entry withdrawn between two rounds is
+        gone from recall but still pooled, and rendering it would resurrect exactly the
+        text the caller withdrew. ``None`` means the live set is unknown, which leaves
+        the pool alone so a backend that cannot list entries behaves as it did before.
+        """
+
+        try:
+            async with self._runtime._context(self.scope_id) as context:
+                if context is None:
+                    return None
+                head, _versions = await context.artifacts.memory.head_entries(
+                    context.artifacts.memory_artifact_id
+                )
+        except Exception:
+            return None
+        # A withdrawn entry keeps its version in the revision and only flips its manifest
+        # state, so the live set has to be read from the manifest rather than from the
+        # entry objects.
+        return frozenset(item.entry_id for item in head.content.manifest.entries if item.state == "active")
 
     async def prepare(
         self,
@@ -928,7 +963,12 @@ class ScopedContextApplication:
 
         return ContextPackDelta.between(base_pack, pack)
 
-    async def _prepare(self, request: PrepareContextRequest, scope: ScopeDescriptor, /) -> PreparedContext:
+    async def _prepare(
+        self,
+        request: PrepareContextRequest,
+        scope: ScopeDescriptor,
+        /,
+    ) -> PreparedContext:
         build, effort = await self._prepare_build(request, scope)
         if effort is not None and self._runtime._recall_effort_sink is not None:
             try:
@@ -1042,12 +1082,25 @@ class ScopedContextApplication:
                 topic_reuse=topic_reuse,
                 round_zero=round_zero,
             )
+        # Both the plain and the incremental build share one body. The incremental
+        # protocol is graded on rebuilding what ``prepare`` returns, so if the two paths
+        # ordered candidates differently the rebuild could never match. Pooling is
+        # therefore applied to every non-assembly preparation: an entry keeps the
+        # position it shipped at, and this round's ranking only decides which *new*
+        # entries join the tail. Without it, every reshuffle invalidated all chunks
+        # after the first moved entry and the delta carried most of the body.
+        #
+        # An explicit assembly is exempt. Its caller states the section limits it wants
+        # and expects this round's best hits to fill them; pooling would push a newly
+        # recalled entry behind everything ever seen and the section limit would then
+        # truncate exactly the entry the query asked for.
+        if request.assembly is None:
+            active_entry_ids = await self._active_memory_entry_ids()
+            memory_candidates = _limit_memory_candidates(
+                self._merge_memory_candidates(memory_candidates, active_entry_ids=active_entry_ids),
+                builder.memory_candidate_limit,
+            )
         code = await self._code_candidates(request) if request.include_code else ()
-        # The first-seen pool exists to keep the incremental body append-only, and
-        # `prepare_incremental` applies it. A plain preparation has no base pack to
-        # respect, so it keeps this round's ranking: pooling here would push a newly
-        # recalled entry behind everything ever seen, and a section limit would then
-        # drop it before it could be rendered.
         with self._runtime._stage(
             "context.build",
             attributes={

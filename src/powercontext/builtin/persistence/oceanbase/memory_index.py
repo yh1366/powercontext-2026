@@ -102,8 +102,14 @@ LIMIT :candidate_limit
 # the plan shows a fulltext scan and a vector index scan, while the application
 # still receives one ordered candidate list per channel.  The tag predicate is
 # expanded per branch because each branch reads a different alias.
+#
+# Each branch is parenthesised on purpose.  In MySQL and OceanBase, ``ORDER BY`` and
+# ``LIMIT`` bind to the whole ``UNION`` result unless the branch is a derived table,
+# so an unparenthesised pair is a syntax error rather than "two ordered runs": ``ORDER
+# BY`` may only appear once, at the end.  The parentheses keep each branch's own
+# ordering and limit, which is what makes the rows arrive already split by channel.
 _OCEANBASE_HYBRID_SEARCH_SQL = """
-SELECT 'fts' AS channel,
+(SELECT 'fts' AS channel,
     f.memory_artifact_id,
     f.head_revision,
     f.entry_id,
@@ -123,9 +129,9 @@ ORDER BY MATCH (f.searchable_text) AGAINST (:analyzed_query IN NATURAL LANGUAGE 
     f.memory_artifact_id,
     f.entry_id,
     f.entry_version_id
-LIMIT :candidate_limit
+LIMIT :candidate_limit)
 UNION ALL
-SELECT 'vector' AS channel,
+(SELECT 'vector' AS channel,
     m.memory_artifact_id,
     m.head_revision,
     m.entry_id,
@@ -141,7 +147,7 @@ WHERE m.scope_id = :scope_id
   AND m.memory_artifact_id IN :memory_artifact_ids
 {TAG_VECTOR}
 ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE
-LIMIT :candidate_limit
+LIMIT :candidate_limit)
 """
 
 

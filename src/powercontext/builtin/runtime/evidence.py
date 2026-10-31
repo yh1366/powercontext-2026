@@ -34,11 +34,9 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-
 from typing import Any
 
-from powercontext.artifacts import ArtifactAddress, ArtifactRef
-
+from powercontext.artifacts import ArtifactAddress
 from powercontext.builtin.runtime.prepared_text import _BEGIN_MARKER, _END_MARKER, TRUST_POLICY
 
 __all__ = [
@@ -165,7 +163,6 @@ def _render(fragments: Sequence[EvidenceFragment], *, width: int | None = None) 
     prefixes of their originals - never mid-character rewrites.
     """
 
-    from powercontext.builtin.runtime.prepared_text import TRUST_POLICY, _BEGIN_MARKER, _END_MARKER
 
     items = []
     for fragment in fragments:
