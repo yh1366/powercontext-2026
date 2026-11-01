@@ -120,6 +120,7 @@ SELECT 'fts' AS channel,
     f.entry_id,
     f.entry_version_id,
     vf.text,
+    MATCH (f.searchable_text) AGAINST (:analyzed_query) AS score,
     NULL AS distance
 FROM pc_memory_entry_heads AS f
 JOIN pc_memory_entry_versions AS vf
@@ -128,9 +129,9 @@ JOIN pc_memory_entry_versions AS vf
  AND vf.entry_version_id = f.entry_version_id
 WHERE f.scope_id = :scope_id
   AND f.memory_artifact_id IN :memory_artifact_ids
-  AND MATCH (f.searchable_text) AGAINST (:analyzed_query IN NATURAL LANGUAGE MODE)
+  AND MATCH (f.searchable_text) AGAINST (:analyzed_query)
 {TAG_FTS}
-ORDER BY MATCH (f.searchable_text) AGAINST (:analyzed_query IN NATURAL LANGUAGE MODE) DESC,
+ORDER BY MATCH (f.searchable_text) AGAINST (:analyzed_query) DESC,
     f.memory_artifact_id,
     f.entry_id,
     f.entry_version_id
@@ -144,6 +145,7 @@ SELECT 'vector' AS channel,
     m.entry_id,
     m.entry_version_id,
     vm.text,
+    NULL AS score,
     l2_distance(m.embedding, :query_vector) AS distance
 FROM pc_memory_vector_entries AS m
 JOIN pc_memory_entry_versions AS vm
@@ -169,6 +171,7 @@ SELECT 'fts' AS channel,
     f.entry_id,
     f.entry_version_id,
     vf.text,
+    MATCH (f.searchable_text) AGAINST (:analyzed_query) AS score,
     NULL AS distance
 FROM pc_memory_entry_heads AS f
 JOIN pc_memory_entry_versions AS vf
@@ -177,9 +180,9 @@ JOIN pc_memory_entry_versions AS vf
  AND vf.entry_version_id = f.entry_version_id
 WHERE f.scope_id = :scope_id
   AND f.memory_artifact_id IN :memory_artifact_ids
-  AND MATCH (f.searchable_text) AGAINST (:analyzed_query IN NATURAL LANGUAGE MODE)
+  AND MATCH (f.searchable_text) AGAINST (:analyzed_query)
 {TAG_FTS}
-ORDER BY MATCH (f.searchable_text) AGAINST (:analyzed_query IN NATURAL LANGUAGE MODE) DESC,
+ORDER BY MATCH (f.searchable_text) AGAINST (:analyzed_query) DESC,
     f.memory_artifact_id,
     f.entry_id,
     f.entry_version_id
@@ -849,8 +852,23 @@ class OceanBaseMemoryHybridIndex:
         vector_rows = [row for row in rows if str(row["channel"]) == "vector"]
         # Each branch carries its own ORDER BY and LIMIT, so normally the rows arrive as
         # two already-ordered runs and splitting them back into channels is enough. A
-        # server that merges the branches may drop that ordering; the vector distance is
-        # in the row, so a run that is out of order is restored to ascending distance.
+        # server is free to merge the branches and drop that ordering, though, and the
+        # whole recall quality depends on both runs keeping their ranking. Every row now
+        # carries its own score or distance, so a run that arrives out of order is put
+        # back from the row data. When the server did keep the order these sorts are
+        # exact no-ops.
+        scores = [None if row.get("score") is None else float(row["score"]) for row in fts_rows]
+        if any(value is None for value in scores) or scores != sorted(scores, reverse=True):
+            order = sorted(
+                range(len(fts_rows)),
+                key=lambda index: (
+                    -float(0.0 if fts_rows[index].get("score") is None else fts_rows[index]["score"]),
+                    str(fts_rows[index]["memory_artifact_id"]),
+                    str(fts_rows[index]["entry_id"]),
+                    str(fts_rows[index]["entry_version_id"]),
+                ),
+            )
+            fts_rows = [fts_rows[index] for index in order]
         distances = [None if row.get("distance") is None else float(row["distance"]) for row in vector_rows]
         if any(value is None for value in distances) or distances != sorted(distances):
             order = sorted(
