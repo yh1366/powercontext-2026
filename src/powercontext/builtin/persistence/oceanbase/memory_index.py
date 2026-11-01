@@ -105,13 +105,15 @@ LIMIT :candidate_limit
 # still receives one ordered candidate list per channel.  The tag predicate is
 # expanded per branch because each branch reads a different alias.
 #
-# Each branch is parenthesised on purpose.  In MySQL and OceanBase, ``ORDER BY`` and
-# ``LIMIT`` bind to the whole ``UNION`` result unless the branch is a derived table,
+# Each branch is a derived table on purpose.  In MySQL and OceanBase, ``ORDER BY`` and
+# ``LIMIT`` bind to the whole ``UNION`` result unless the branch is its own query block,
 # so an unparenthesised pair is a syntax error rather than "two ordered runs": ``ORDER
-# BY`` may only appear once, at the end.  The parentheses keep each branch's own
-# ordering and limit, which is what makes the rows arrive already split by channel.
+# BY`` may only appear once, at the end.  A derived table is the portable spelling of
+# that block, and the branch's ``LIMIT`` prevents the optimizer from merging it back
+# into the outer query, which is what keeps each channel's ordering intact.
 _OCEANBASE_HYBRID_SEARCH_SQL = """
-(SELECT 'fts' AS channel,
+SELECT * FROM (
+SELECT 'fts' AS channel,
     f.memory_artifact_id,
     f.head_revision,
     f.entry_id,
@@ -131,9 +133,11 @@ ORDER BY MATCH (f.searchable_text) AGAINST (:analyzed_query IN NATURAL LANGUAGE 
     f.memory_artifact_id,
     f.entry_id,
     f.entry_version_id
-LIMIT :candidate_limit)
+LIMIT :candidate_limit
+) AS fts_candidates
 UNION ALL
-(SELECT 'vector' AS channel,
+SELECT * FROM (
+SELECT 'vector' AS channel,
     m.memory_artifact_id,
     m.head_revision,
     m.entry_id,
@@ -149,7 +153,8 @@ WHERE m.scope_id = :scope_id
   AND m.memory_artifact_id IN :memory_artifact_ids
 {TAG_VECTOR}
 ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE
-LIMIT :candidate_limit)
+LIMIT :candidate_limit
+) AS vector_candidates
 """
 
 # Fallback statements used only when the combined statement is rejected by the
@@ -814,6 +819,22 @@ class OceanBaseMemoryHybridIndex:
         # two already-ordered runs; split them back into channels without re-sorting.
         fts_rows = [row for row in rows if str(row["channel"]) == "fts"]
         vector_rows = [row for row in rows if str(row["channel"]) == "vector"]
+        # Each branch carries its own ORDER BY and LIMIT, so normally the rows arrive as
+        # two already-ordered runs and splitting them back into channels is enough. A
+        # server that merges the branches may drop that ordering; the vector distance is
+        # in the row, so a run that is out of order is restored to ascending distance.
+        distances = [None if row.get("distance") is None else float(row["distance"]) for row in vector_rows]
+        if any(value is None for value in distances) or distances != sorted(distances):
+            order = sorted(
+                range(len(vector_rows)),
+                key=lambda index: (
+                    float("inf") if vector_rows[index].get("distance") is None else float(vector_rows[index]["distance"]),
+                    str(vector_rows[index]["memory_artifact_id"]),
+                    str(vector_rows[index]["entry_id"]),
+                    str(vector_rows[index]["entry_version_id"]),
+                ),
+            )
+            vector_rows = [vector_rows[index] for index in order]
         return MemorySearchChannels(
             fts=memory_channel_hits(fts_rows, request.memories),
             vector=memory_channel_hits(vector_rows, request.memories),
