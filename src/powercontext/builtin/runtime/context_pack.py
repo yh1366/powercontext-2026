@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Self
 
@@ -24,11 +25,12 @@ DELTA_SCHEMA = "powercontext.context-pack-delta.v1"
 # themselves: an insertion only re-chunks a local neighbourhood and the stream re-synchronises
 # within roughly one average chunk, which is what the transfer-cost gate measures.
 #
-# The average is deliberately small. The body ends with the Memory revision number, so the
-# tail rewrites every round even when no entry changed; at 512-byte chunks that tail change
-# replaced a whole chunk and the delta carried a large slice of the body. At ~128 bytes the
-# resent region shrinks with it, and the extra per-chunk JSON costs only a few bytes each.
-INCREMENTAL_CHUNK_BYTES = 2048
+# The hard cap is the documented default chunk size, so a pack produced here is also a
+# legal from_content(content) pack at the caller-facing size. The average boundary distance
+# is deliberately smaller: the body ends with the Memory revision number, so the tail is
+# rewritten every round even when no entry changed, and a large chunk there would drag a
+# whole slice of unchanged body into the delta.
+INCREMENTAL_CHUNK_BYTES = 512
 _CHUNK_AVERAGE_BITS = 7
 _CHUNK_AVERAGE = 1 << _CHUNK_AVERAGE_BITS  # geometric mean distance between boundaries
 _CHUNK_MIN_BYTES = 32
@@ -76,6 +78,41 @@ def _decode_item(value: object) -> bytes:
         return base64.b64decode(value, validate=True)
     except Exception as error:
         raise ContextPackError("invalid base64 item") from error
+
+
+def _wire_payload(value: object) -> dict | None:
+    """Return the decoded wire object when a caller passes a serialized form.
+
+    A receiver that has only the wire bytes (or the parsed JSON) should not need a
+    second call to rehydrate before replaying a delta, so both pack and delta
+    consumers accept objects, bytes, text and mappings interchangeably.
+    """
+
+    if isinstance(value, str):
+        return _load_object(value.encode("utf-8"))
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return _load_object(bytes(value))
+    if isinstance(value, Mapping):
+        return dict(value)
+    return None
+
+
+def _as_pack(value: object) -> ContextPack:
+    if isinstance(value, ContextPack):
+        return value
+    payload = _wire_payload(value)
+    if payload is None:
+        raise ContextPackError("base and target must be context packs")
+    return ContextPack.from_bytes(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+
+
+def _as_delta(value: object) -> ContextPackDelta:
+    if isinstance(value, ContextPackDelta):
+        return value
+    payload = _wire_payload(value)
+    if payload is None:
+        raise ContextPackError("delta must be a context pack delta")
+    return ContextPackDelta.from_bytes(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
 
 
 @dataclass(frozen=True)
@@ -189,6 +226,8 @@ class ContextPackDelta:
 
     @classmethod
     def between(cls, base: ContextPack, target: ContextPack) -> Self:
+        base = _as_pack(base)
+        target = _as_pack(target)
         prefix = 0
         for i in range(min(len(base.items), len(target.items))):
             if base.items[i] == target.items[i]:
@@ -246,6 +285,8 @@ class ContextPackDelta:
 
 def apply_context_pack_delta(base: ContextPack, delta: ContextPackDelta) -> ContextPack:
     """Apply a delta to a base pack, producing the target pack."""
+    base = _as_pack(base)
+    delta = _as_delta(delta)
     if base.digest != delta.base_digest:
         raise ContextPackError("base digest mismatch")
 

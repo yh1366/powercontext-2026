@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
@@ -961,6 +962,8 @@ class ScopedContextApplication:
         if isinstance(base_pack, (bytes, bytearray, memoryview)):
             # A receiver that only kept the wire form should not have to decode by hand.
             base_pack = ContextPack.from_bytes(bytes(base_pack))
+        if isinstance(base_pack, Mapping):
+            base_pack = ContextPack.from_bytes(json.dumps(dict(base_pack), sort_keys=True, separators=(",", ":")).encode())
         if not isinstance(base_pack, ContextPack):
             raise TypeError("base_pack must be a ContextPack instance")
 
