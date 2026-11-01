@@ -320,7 +320,30 @@ async def search_pdf_pages(
         # vocabulary, so lexical ranking alone leaves the statement page far outside the
         # returned pages. Leading with the statement pages makes the evidence reachable;
         # everything else keeps the order the ranking gave it.
-        primary = [page for page in ranked if page.profile.statement in wanted_statements][:_STATEMENT_INJECT]
+        #
+        # A question can point at more than one statement ("how much of revenue comes
+        # from each product category" wants the segment table, not the income
+        # statement), and lexical order will happily spend every slot on the first one.
+        # Categorical wording is the narrower intent of the two: it names the split the
+        # answer has to show, so it keeps the slots for itself.
+        if "segment" in wanted_statements:
+            wanted_statements = frozenset({"segment"})
+        primary: list[_Page] = []
+        chosen: set[int] = set()
+        for name in sorted(wanted_statements):
+            for page in ranked:
+                if page.profile.statement == name and id(page) not in chosen:
+                    primary.append(page)
+                    chosen.add(id(page))
+                    break
+        if len(primary) < _STATEMENT_INJECT:
+            for page in ranked:
+                if page.profile.statement in wanted_statements and id(page) not in chosen:
+                    primary.append(page)
+                    chosen.add(id(page))
+                    if len(primary) == _STATEMENT_INJECT:
+                        break
+        primary = primary[:_STATEMENT_INJECT]
         if primary:
             chosen = {id(page) for page in primary}
             ranked = [*primary, *(page for page in ranked if id(page) not in chosen)]
@@ -799,6 +822,11 @@ _STATEMENT_HEADERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("balance", re.compile(r"consolidated\s+balance\s+sheet")),
     ("income", re.compile(r"consolidated\s+statements?\s+of\s+(income|operations)")),
     ("cash", re.compile(r"consolidated\s+statements?\s+of\s+cash\s+flow")),
+    # A question can ask how revenue splits across the businesses instead of asking for
+    # one line of a primary statement. That answer lives on the segment table, whose
+    # wording ("Commercial Airplanes", "Global Services") never repeats the question's
+    # "product categories", so it needs the same first-class signal.
+    ("segment", re.compile(r"(summary\s+of\s+)?(business|reportable|operating)\s+segments?")),
 )
 # Every report page repeats the running header "Table of Contents", so a heading match
 # alone also fires on the contents page, which lists titles and page numbers instead of
@@ -808,6 +836,7 @@ _STATEMENT_STEMS: dict[str, frozenset[str]] = {
     "balance": frozenset({"quick", "curren", "ratio", "liquid", "asset", "liabil", "equity", "workin", "capita"}),
     "income": frozenset({"margin", "revenu", "income", "expens", "tax", "gross", "operat", "profit", "sales"}),
     "cash": frozenset({"flow", "capex", "expend", "deprec", "amorti"}),
+    "segment": frozenset({"segmen", "catego", "brand", "divisi"}),
 }
 # Promoting a statement's pages is enough to reach the primary table and its
 # continuations while leaving the lexical ranking intact behind them. Three pages in
