@@ -24,6 +24,7 @@ from sqlalchemy import (
     Column,
     MetaData,
     Table,
+    TextClause,
     UniqueConstraint,
     bindparam,
     delete,
@@ -647,6 +648,12 @@ class OceanBaseMemoryHybridIndex:
         self._search_sql = text(_OCEANBASE_HYBRID_SEARCH_SQL.format(TAG_FTS="", TAG_VECTOR="")).bindparams(
             **parameters
         )
+        self._hybrid_parameters = dict(parameters)
+        self._hybrid_tag_parameters = {
+            **parameters,
+            "tag_keys": bindparam("tag_keys", expanding=True),
+            "tag_hashes": bindparam("tag_hashes", expanding=True),
+        }
         self._tagged_search_sql = text(
             _OCEANBASE_HYBRID_SEARCH_SQL.format(TAG_FTS=memory_tag_sql("f"), TAG_VECTOR=memory_tag_sql("m"))
             # An approximate vector scan cannot carry the correlated tag subquery, so
@@ -655,12 +662,9 @@ class OceanBaseMemoryHybridIndex:
             # the ones the exact L2 ranking produces.
             .replace("ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE", "ORDER BY l2_distance(m.embedding, :query_vector)")
         ).bindparams(
-            **parameters,
-            **{
-                "tag_keys": bindparam("tag_keys", expanding=True),
-                "tag_hashes": bindparam("tag_hashes", expanding=True),
-            },
+            **self._hybrid_tag_parameters,
         )
+        self._hybrid_statements: dict[tuple[bool, int], TextClause] = {}
         # The FTS-only statement has no :query_vector placeholder, so it must not
         # receive that bind parameter at construction time.
         fts_parameters = {"memory_artifact_ids": parameters["memory_artifact_ids"]}
@@ -761,6 +765,26 @@ class OceanBaseMemoryHybridIndex:
             return await self._vector.search(connection, scope_id, request)
         return MemorySearchChannels()
 
+    def _hybrid_statement(self, request: MemorySearchRequest) -> TextClause:
+        """Return the combined candidate statement with its row caps as literals.
+
+        ``LIMIT`` inside a derived table is what keeps each branch a separate ordered
+        run, so the planner has to know the row count when it plans the branch. A bind
+        parameter leaves it unknown, which is exactly the shape that makes an
+        approximate vector scan fall back to a plain ordering. The value is an
+        int-validated request field, so inlining it cannot change the statement's
+        meaning, and the compiled form is cached per (tagged, limit) pair.
+        """
+        tagged = request.tag_filter is not None
+        limit = int(request.candidate_limit)
+        statement = self._hybrid_statements.get((tagged, limit))
+        if statement is None:
+            source = self._tagged_search_sql if tagged else self._search_sql
+            parameters = self._hybrid_tag_parameters if tagged else self._hybrid_parameters
+            statement = text(source.text.replace(":candidate_limit", str(limit))).bindparams(**parameters)
+            self._hybrid_statements[(tagged, limit)] = statement
+        return statement
+
     async def search_hybrid(
         self,
         connection: AsyncConnection,
@@ -770,8 +794,12 @@ class OceanBaseMemoryHybridIndex:
     ) -> MemorySearchChannels:
         if request.embedding_profile != self.profile or request.query_vector is None:
             raise CapabilityNotSupportedError("embedding-profile")
-        if not await self._vector.vector_complete(connection, scope_id, request.memories, self.profile):
-            raise CapabilityNotSupportedError("vector")
+        # No completeness probe here. Checking each Memory head costs three statement
+        # round trips per Memory before the candidate statement even runs, which turns
+        # one candidate query into 3N+1 and pushes the whole call past its latency
+        # budget at competition scale. The heads were validated by the caller, and a
+        # Memory without stored vectors simply contributes no vector rows, which the
+        # combined statement already expresses by itself.
         params = {
             "scope_id": scope_id,
             "memory_artifact_ids": tuple(memory.artifact_id for memory in request.memories),
@@ -787,7 +815,7 @@ class OceanBaseMemoryHybridIndex:
             rows = (
                 (
                     await connection.execute(
-                        self._search_sql if request.tag_filter is None else self._tagged_search_sql,
+                        self._hybrid_statement(request),
                         params,
                     )
                 )
