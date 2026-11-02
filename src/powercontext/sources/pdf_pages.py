@@ -178,6 +178,14 @@ _PROXIMITY_WEIGHT = 0.9
 _FUSION_WEIGHT = 0.30
 _FUSION_SCALE = 60.0
 _DOCUMENT_BOOST = 0.20
+# One scoped Memory can hold several filings. A question that names the filer
+# ("the effective tax rate of American Express") settles which document holds the
+# answer, and lexical overlap does not: every filing uses the same accounting
+# vocabulary. The name is only a multiplier, so it reorders documents and never
+# reorders pages inside the document the ranking already chose.
+_DOCUMENT_NAME_BOOST = 0.60
+_DOCUMENT_NAME_MIN = 4
+_DOCUMENT_NAME_NOISE = frozenset({"10k", "10q", "8k", "annual", "report", "reports", "form", "inc", "corp", "llc"})
 _CANDIDATE_PER_QUERY = 50
 _CORPUS_LIMIT = 4000
 _CORPUS_PROBES = ("the", "of", "and", "to", "in", "for")
@@ -312,7 +320,7 @@ async def search_pdf_pages(
         _CORPUS_LIMIT,
     )
     fused = {hit.entry_id: rank for rank, hit in enumerate(ranking.hits)}
-    ranked = _rank(pages, terms, fused)
+    ranked = _rank(pages, terms, fused, question)
     ranked = _focus_document(ranked, limit)
     wanted_statements = _wanted_statements(question)
     if wanted_statements:
@@ -343,7 +351,12 @@ async def search_pdf_pages(
                     chosen.add(id(page))
                     if len(primary) == _STATEMENT_INJECT:
                         break
-        primary = primary[:_STATEMENT_INJECT]
+        # Only a statement page that the window cannot reach yet needs promoting.
+        # Moving one that already sits inside the window to the front changes nothing
+        # for it and costs the page that was last in the window, which is a page the
+        # ranking found on its own merit.
+        window = {id(page) for page in ranked[:limit]}
+        primary = [page for page in primary[:_STATEMENT_INJECT] if id(page) not in window]
         if primary:
             chosen = {id(page) for page in primary}
             ranked = [*primary, *(page for page in ranked if id(page) not in chosen)]
@@ -683,8 +696,36 @@ def _document_of(text: str) -> str:
     return head.casefold()
 
 
+def _document_alias(document: str) -> str:
+    """Reduce a document id to the filer name worth matching in a question."""
+
+    parts = _TEXT_TOKEN.findall(document.casefold())
+    return "".join(part for part in parts if not part.isdigit() and part not in _DOCUMENT_NAME_NOISE)
+
+
+def _named_documents(question: str, pages: tuple[_Page, ...]) -> frozenset[str]:
+    """Return the one document the question names, when it names exactly one."""
+
+    if not question:
+        return frozenset()
+    documents = {page.document for page in pages if page.document}
+    if len(documents) < 2:
+        # A single document already answers every page; the name adds nothing.
+        return frozenset()
+    compact = "".join(_TEXT_TOKEN.findall(question.casefold()))
+    named = {
+        document
+        for document in documents
+        if len(alias := _document_alias(document)) >= _DOCUMENT_NAME_MIN and alias in compact
+    }
+    if len(named) != 1:
+        # Several names, or none: the question does not settle the document.
+        return frozenset()
+    return frozenset(named)
+
+
 def _rank(  # noqa: C901
-    pages: tuple[_Page, ...], terms: tuple[_Term, ...], fused: dict[str, int]
+    pages: tuple[_Page, ...], terms: tuple[_Term, ...], fused: dict[str, int], question: str = ""
 ) -> list[_Page]:
     """Rank the page collection against one question's lexical profile.
 
@@ -716,6 +757,8 @@ def _rank(  # noqa: C901
             continue
         document_affinity[page.document_keys] = sum(weights[key] for key in page.document_keys.intersection(weights))
     best_document = max(document_affinity.values(), default=0.0)
+    named_documents = _named_documents(question, pages)
+    name_factor = 1.0 + _DOCUMENT_NAME_BOOST
 
     scored: list[tuple[float, int, _Page]] = []
     for order, page in enumerate(pages):
@@ -743,6 +786,8 @@ def _rank(  # noqa: C901
             score += _FUSION_WEIGHT * _FUSION_SCALE / (_FUSION_SCALE + rank)
         if best_document > 0.0:
             score *= 1.0 + _DOCUMENT_BOOST * (document_affinity[page.document_keys] / best_document)
+        if named_documents and page.document in named_documents:
+            score *= name_factor
         scored.append((score, order, page))
     scored.sort(key=lambda item: (-item[0], item[1]))
     return [page for _score, _order, page in scored]
