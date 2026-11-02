@@ -66,6 +66,33 @@ class EvidenceFragment:
     text: str
 
 _TOKEN = re.compile(r"[a-z]+|\d+")
+# A claim and the sentence that supports it rarely repeat the same inflection:
+# "cells" is answered by "cell lines", "modified" by "modification", and
+# "post-translationally" by "posttranslational".  Matching raw tokens therefore
+# scores the boilerplate that echoes the claim over the sentence that states the
+# finding, so terms are reduced to a stem before they are counted.  The reduction
+# is deliberately shallow - it only strips one suffix and never below four
+# characters - because the metric itself still matches exact words.
+_SUFFIXES = (
+    "ational",
+    "ization",
+    "isation",
+    "ations",
+    "ation",
+    "ingly",
+    "edly",
+    "ment",
+    "ness",
+    "ions",
+    "ion",
+    "ies",
+    "ing",
+    "ed",
+    "es",
+    "s",
+    "ly",
+    "al",
+)
 # A sentence is the unit of selection: keeping whole sentences makes the delivered
 # evidence readable and lets one entry yield several disjoint spans.
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -93,8 +120,19 @@ class EvidenceSelection:
     fragments: tuple[EvidenceFragment, ...]
 
 
+def _stem(term: str) -> str:
+    """Strip one inflectional suffix, keeping at least four characters."""
+
+    if len(term) <= 4 or not term.isalpha():
+        return term
+    for suffix in _SUFFIXES:
+        if term.endswith(suffix) and len(term) - len(suffix) >= 4:
+            return term[: -len(suffix)]
+    return term
+
+
 def _terms(text: str) -> list[str]:
-    return _TOKEN.findall(text.lower())
+    return [_stem(token) for token in _TOKEN.findall(text.lower())]
 
 
 def _sentence_spans(text: str) -> list[tuple[int, int]]:
@@ -186,6 +224,33 @@ def _render(fragments: Sequence[EvidenceFragment], *, width: int | None = None) 
 
 def _fits(fragments: Sequence[EvidenceFragment], max_bytes: int) -> bool:
     return len(_render(fragments).encode("utf-8")) <= max_bytes
+
+
+def _truncate(span: _Span, max_bytes: int) -> EvidenceFragment | None:
+    """Keep the longest leading part of one span that still fits the budget.
+
+    A single sentence can be longer than the whole budget - a run of prose with no
+    sentence terminator in it is one span.  Selection must still deliver the head of
+    that sentence instead of nothing, so the span is bisected on a character
+    boundary, which keeps the text a verbatim prefix of the entry.
+    """
+
+    low, high = 0, len(span.text)
+    best: EvidenceFragment | None = None
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = EvidenceFragment(
+            address=span.address,
+            start=span.start,
+            end=span.start + middle,
+            text=span.text[:middle],
+        )
+        if middle > 0 and _fits((candidate,), max_bytes):
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
 
 
 def _pack_to_budget(fragments: Sequence[EvidenceFragment], max_bytes: int) -> tuple[EvidenceFragment, ...]:
@@ -428,6 +493,13 @@ def select_evidence(
         offer(span)
 
     merged = _merge(accepted)
+    if not merged and ranked:
+        # Nothing fit as a whole span.  Returning an empty context here would tell the
+        # caller there is no evidence when there is evidence that is merely longer than
+        # the budget, so deliver the head of the strongest span instead.
+        head = _truncate(ranked[0], max_bytes)
+        if head is not None:
+            merged = [head]
     kept = tuple(merged) if _fits(merged, max_bytes) else _pack_to_budget(merged, max_bytes)
     if not kept:
         return EvidenceSelection(content=None, fragments=())

@@ -25,12 +25,14 @@ DELTA_SCHEMA = "powercontext.context-pack-delta.v1"
 # themselves: an insertion only re-chunks a local neighbourhood and the stream re-synchronises
 # within roughly one average chunk, which is what the transfer-cost gate measures.
 #
-# The hard cap is the documented default chunk size, so a pack produced here is also a
-# legal from_content(content) pack at the caller-facing size. The average boundary distance
-# is deliberately smaller: the body ends with the Memory revision number, so the tail is
-# rewritten every round even when no entry changed, and a large chunk there would drag a
-# whole slice of unchanged body into the delta.
-INCREMENTAL_CHUNK_BYTES = 512
+# Each item is charged a Base64 expansion plus its JSON punctuation, so a chunk has
+# to be small enough that the prefix breaks near where the body actually changed.
+# The measured trade-off on 40 distinct real QMSum turns: at a 1024-byte budget with
+# a query switch every four rounds, 512-byte chunks re-send 66% of the body (saving
+# 0.34, under the 0.45 floor) because one new entry moves every later boundary,
+# while 64-byte chunks save 0.60.  Larger budgets keep the same ordering, and the
+# caller-facing default of ``from_content`` stays 512.
+INCREMENTAL_CHUNK_BYTES = 64
 _CHUNK_AVERAGE_BITS = 7
 _CHUNK_AVERAGE = 1 << _CHUNK_AVERAGE_BITS  # geometric mean distance between boundaries
 _CHUNK_MIN_BYTES = 32
