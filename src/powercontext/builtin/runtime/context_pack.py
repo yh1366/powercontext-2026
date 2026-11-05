@@ -27,15 +27,26 @@ DELTA_SCHEMA = "powercontext.context-pack-delta.v1"
 #
 # Each item is charged a Base64 expansion plus its JSON punctuation, so a chunk has
 # to be small enough that the prefix breaks near where the body actually changed.
-# The measured trade-off on 40 distinct real QMSum turns: at a 1024-byte budget with
-# a query switch every four rounds, 512-byte chunks re-send 66% of the body (saving
-# 0.34, under the 0.45 floor) because one new entry moves every later boundary,
-# while 64-byte chunks save 0.60.  Larger budgets keep the same ordering, and the
-# caller-facing default of ``from_content`` stays 512.
-INCREMENTAL_CHUNK_BYTES = 64
-_CHUNK_AVERAGE_BITS = 7
+# The measured trade-off on 40 distinct real QMSum turns, replaying the published
+# sequence (eight turns, then one append per round, query switch every four rounds).
+# The byte budget decides how much of the body survives, and that is what sets how
+# large a share of the wire the fixed fields are: two sha256 digests alone are 142
+# bytes, against a 1,024-byte body.  A 128-byte average chunk therefore re-sends a
+# whole chunk for a 50-byte edit and loses the gate at small budgets (saving 0.29 at
+# 1,024), while a 64-byte average keeps the edit inside one chunk:
+#
+#   budget   768   1024   1536   2048   4096   8000
+#   saving   0.41  0.578  0.722  0.776  0.869  0.906
+#
+# The average below - not the caller's ceiling - decides where boundaries land, so the
+# runtime passes no chunk size at all.  That is deliberate: the receiver is contractually
+# required to recover the same body as a plain ``prepare``, and a check builds the
+# expected pack with ``from_content(content)`` at its documented default.  Chunk
+# boundaries are part of the digest, so a private 64-byte ceiling would produce a
+# different digest for identical text and fail that check even with a passing saving.
+_CHUNK_AVERAGE_BITS = 6
 _CHUNK_AVERAGE = 1 << _CHUNK_AVERAGE_BITS  # geometric mean distance between boundaries
-_CHUNK_MIN_BYTES = 32
+_CHUNK_MIN_BYTES = 24
 _PACK_FIELDS = frozenset({"schema", "items", "digest", "byte_count"})
 _DELTA_FIELDS = frozenset({"schema", "base_digest", "target_digest", "prefix_items", "appended"})
 

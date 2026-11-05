@@ -944,14 +944,16 @@ class ScopedContextApplication:
         authorize_scopes: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
     ) -> object:
         from powercontext.builtin.runtime.context_pack import (
-            INCREMENTAL_CHUNK_BYTES,
             ContextPack,
             ContextPackDelta,
         )
 
         prepared = await self.prepare(request, authorize_scopes=authorize_scopes)
         content_bytes = (prepared.content or "").encode("utf-8")
-        pack = ContextPack.from_content(content_bytes, chunk_bytes=INCREMENTAL_CHUNK_BYTES)
+        # No chunk size is passed: the pack a receiver rebuilds has to be
+        # byte-identical to ``ContextPack.from_content(content)`` at its documented
+        # default, and the chunk boundaries are part of the digest.
+        pack = ContextPack.from_content(content_bytes)
 
         if base_pack is None:
             return pack

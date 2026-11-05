@@ -77,22 +77,38 @@ _SUFFIXES = (
     "ational",
     "ization",
     "isation",
+    "ationally",
     "ations",
     "ation",
+    "ities",
     "ingly",
     "edly",
+    "ally",
     "ment",
     "ness",
+    "osis",
     "ions",
     "ion",
     "ies",
     "ing",
+    "ity",
+    "ers",
+    "ors",
+    "sis",
     "ed",
     "es",
+    "er",
+    "or",
     "s",
     "ly",
     "al",
 )
+# A hyphenated compound in the claim is one word in the abstract: the claim says
+# "post-translationally modified" and the evidence says "posttranslational
+# modification".  Tokenizing on the hyphen alone produces "post" and
+# "translationally", which can never meet "posttranslational", so the joined form is
+# added as an extra term on both sides.
+_COMPOUND = re.compile(r"[a-z]+(?:-[a-z]+)+")
 # A sentence is the unit of selection: keeping whole sentences makes the delivered
 # evidence readable and lets one entry yield several disjoint spans.
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -110,6 +126,20 @@ _ENTRY_PRIOR_WEIGHT = 0.35
 # Greedy selection rewards breadth: a sentence covering a query term that nothing
 # selected so far covers is worth more than another sentence reusing a covered one.
 _COVERAGE_WEIGHT = 0.6
+# Structured abstracts open with a labelled background block that repeats the claim's
+# topic words without stating the finding - "CONTEXT The growth inhibitory effect of
+# tamoxifen..." matches any tamoxifen claim.  A whole citation costs roughly 200 bytes
+# of the 1,400-byte envelope, so one such sentence spends a third of the budget on the
+# part of the abstract least likely to hold the annotated evidence.
+_BACKGROUND_HEAD = re.compile(
+    r"^\s*(?:CONTEXT|BACKGROUND|OBJECTIVE|OBJECTIVES|DESIGN|SETTING|METHODS|"
+    r"PATIENTS|PARTICIPANTS|INTERVENTIONS|MAIN OUTCOME MEASURES)[S ,:/]"
+)
+_BACKGROUND_WEIGHT = 0.55
+# The other half of the same structure: a claim is supported or refuted by what the
+# abstract *found*, and RESULTS / CONCLUSIONS is where that sentence lives.
+_FINDING_HEAD = re.compile(r"^\s*(?:RESULTS|FINDINGS|CONCLUSIONS?|INTERPRETATION)[S ,:/]")
+_FINDING_WEIGHT = 1.25
 
 
 @dataclass(frozen=True)
@@ -128,11 +158,19 @@ def _stem(term: str) -> str:
     for suffix in _SUFFIXES:
         if term.endswith(suffix) and len(term) - len(suffix) >= 4:
             return term[: -len(suffix)]
+    # "metabolize" and "metabolizers" are the same claim term; the agent noun keeps a
+    # "z" that the verb hides behind a silent "e", so the trailing "e" goes too.
+    if term.endswith("e") and len(term) >= 6:
+        return term[:-1]
     return term
 
 
 def _terms(text: str) -> list[str]:
-    return [_stem(token) for token in _TOKEN.findall(text.lower())]
+    lowered = text.lower()
+    terms = [_stem(token) for token in _TOKEN.findall(lowered)]
+    if "-" in lowered:
+        terms.extend(_stem(match.group().replace("-", "")) for match in _COMPOUND.finditer(lowered))
+    return terms
 
 
 def _sentence_spans(text: str) -> list[tuple[int, int]]:
@@ -388,7 +426,8 @@ def select_evidence(
             continue
         text = entry.content or ""
         for start, end in _sentence_spans(text):
-            counts = Counter(_terms(text[start:end]))
+            body = text[start:end]
+            counts = Counter(_terms(body))
             if not counts:
                 continue
             spans.append(
@@ -397,7 +436,7 @@ def select_evidence(
                     entry=rank,
                     start=start,
                     end=end,
-                    text=text[start:end],
+                    text=body,
                     counts=counts,
                     length=sum(counts.values()),
                     source=text,
@@ -409,20 +448,28 @@ def select_evidence(
     weights = _idf(query_terms, [span.counts for span in spans])
     # An entry whose whole body covers the query is a better source of evidence than
     # one that happens to share a single term, so each entry contributes a bounded
-    # prior instead of competing sentence-to-sentence on equal terms.
-    coverage_mass: dict[int, float] = {}
+    # prior instead of competing sentence-to-sentence on equal terms.  The prior counts
+    # how many *different* query terms an entry covers, not how much weight it
+    # accumulates: two topic-matched abstracts both repeat "tamoxifen" twenty times,
+    # and only the one that also carries "metabolize", "genotype" and "outcome" is the
+    # evidence source.  Summing weight rewarded the longer distractor for repeating the
+    # shared topic word; distinct coverage does not.
+    covered_terms: dict[int, set[str]] = {}
     for span in spans:
-        coverage_mass[span.entry] = coverage_mass.get(span.entry, 0.0) + sum(
-            weights[term] for term in span.counts.keys() & weights.keys()
-        )
-    best_mass = max(coverage_mass.values(), default=0.0) or 1.0
-    prior = {entry: mass / best_mass for entry, mass in coverage_mass.items()}
+        covered_terms.setdefault(span.entry, set()).update(span.counts.keys() & weights.keys())
+    query_term_count = max(1, len(set(query_terms)))
+    prior = {entry: len(terms) / query_term_count for entry, terms in covered_terms.items()}
     average_length = max(sum(span.length for span in spans) / len(spans), 1.0)
 
     value_of: dict[tuple[str, str, int], float] = {}
     pool: list[tuple[float, _Span]] = []
     for span in spans:
         value = _sentence_score(span.counts, span.length, weights, average_length, prior.get(span.entry, 0.0))
+        if value > 0.0:
+            if _BACKGROUND_HEAD.match(span.text):
+                value *= _BACKGROUND_WEIGHT
+            elif _FINDING_HEAD.match(span.text):
+                value *= _FINDING_WEIGHT
         value_of[_span_key(span)] = value
         if value > 0.0:
             pool.append((value, span))
