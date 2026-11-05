@@ -37,7 +37,14 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from powercontext.artifacts import ArtifactAddress
-from powercontext.builtin.runtime.prepared_text import _BEGIN_MARKER, _END_MARKER, TRUST_POLICY
+from powercontext.builtin.runtime.prepared_text import TRUST_POLICY
+
+# The evidence body replaces the *prepared context*, so it must carry the envelope the
+# ordinary prepare path emits.  The text-assembly renderer labels its bytes with a
+# different schema ("PREPARED_TEXT_V1"), and a body delivered from evidence selection
+# under that label is not the prepared context the caller asked for.
+_BEGIN_MARKER = "BEGIN_POWERCONTEXT_PREPARED_CONTEXT_V1"
+_END_MARKER = "END_POWERCONTEXT_PREPARED_CONTEXT_V1"
 
 __all__ = [
     "EvidenceFragment",
