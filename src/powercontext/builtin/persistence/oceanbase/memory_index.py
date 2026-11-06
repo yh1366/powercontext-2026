@@ -644,19 +644,28 @@ class OceanBaseMemoryHybridIndex:
             tag_filter=fts.capabilities.tag_filter and vector.capabilities.tag_filter,
         )
         self.tables = fts.tables + vector.tables
-        parameters = {
-            "memory_artifact_ids": bindparam("memory_artifact_ids", expanding=True),
-            "query_vector": bindparam("query_vector", type_=VECTOR(vector.profile.dimension)),
-        }
+
+        # bindparams() must receive the BindParameter objects positionally, and each
+        # statement needs its own instances.  Passed as **kwargs, TextClause.bindparams
+        # treats the object as a bind VALUE and clones the auto-created placeholder
+        # instead, which drops the declared VECTOR type and the expanding flag — the
+        # query vector then reaches the driver as a raw tuple and the server rejects
+        # the statement with "Operand should contain 1 column(s)" (1241).
+        def _search_parameters() -> dict[str, BindParameter]:
+            return {
+                "memory_artifact_ids": bindparam("memory_artifact_ids", expanding=True),
+                "query_vector": bindparam("query_vector", type_=VECTOR(vector.profile.dimension)),
+            }
+
+        def _tag_parameters() -> dict[str, BindParameter]:
+            return {
+                "tag_keys": bindparam("tag_keys", expanding=True),
+                "tag_hashes": bindparam("tag_hashes", expanding=True),
+            }
+
         self._search_sql = text(_OCEANBASE_HYBRID_SEARCH_SQL.format(TAG_FTS="", TAG_VECTOR="")).bindparams(
-            **parameters
+            *_search_parameters().values()
         )
-        self._hybrid_parameters = dict(parameters)
-        self._hybrid_tag_parameters = {
-            **parameters,
-            "tag_keys": bindparam("tag_keys", expanding=True),
-            "tag_hashes": bindparam("tag_hashes", expanding=True),
-        }
         self._tagged_search_sql = text(
             _OCEANBASE_HYBRID_SEARCH_SQL.format(TAG_FTS=memory_tag_sql("f"), TAG_VECTOR=memory_tag_sql("m"))
             # An approximate vector scan cannot carry the correlated tag subquery, so
@@ -665,30 +674,28 @@ class OceanBaseMemoryHybridIndex:
             # the ones the exact L2 ranking produces.
             .replace("ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE", "ORDER BY l2_distance(m.embedding, :query_vector)")
         ).bindparams(
-            **self._hybrid_tag_parameters,
+            *_search_parameters().values(),
+            *_tag_parameters().values(),
         )
         self._hybrid_statements: dict[tuple[bool, int], TextClause] = {}
         # The FTS-only statement has no :query_vector placeholder, so it must not
         # receive that bind parameter at construction time.
-        fts_parameters = {"memory_artifact_ids": parameters["memory_artifact_ids"]}
-        self._fts_only_sql = text(_OCEANBASE_FTS_CHANNEL_SQL.format(TAG_FTS="")).bindparams(**fts_parameters)
-        self._tagged_fts_only_sql = text(_OCEANBASE_FTS_CHANNEL_SQL.format(TAG_FTS=memory_tag_sql("f"))).bindparams(
-            **fts_parameters,
-            **{
-                "tag_keys": bindparam("tag_keys", expanding=True),
-                "tag_hashes": bindparam("tag_hashes", expanding=True),
-            },
+        self._fts_only_sql = text(_OCEANBASE_FTS_CHANNEL_SQL.format(TAG_FTS="")).bindparams(
+            bindparam("memory_artifact_ids", expanding=True),
         )
-        self._vector_only_sql = text(_OCEANBASE_VECTOR_CHANNEL_SQL.format(TAG_VECTOR="")).bindparams(**parameters)
+        self._tagged_fts_only_sql = text(_OCEANBASE_FTS_CHANNEL_SQL.format(TAG_FTS=memory_tag_sql("f"))).bindparams(
+            bindparam("memory_artifact_ids", expanding=True),
+            *_tag_parameters().values(),
+        )
+        self._vector_only_sql = text(_OCEANBASE_VECTOR_CHANNEL_SQL.format(TAG_VECTOR="")).bindparams(
+            *_search_parameters().values()
+        )
         self._tagged_vector_only_sql = text(
             _OCEANBASE_VECTOR_CHANNEL_SQL.format(TAG_VECTOR=memory_tag_sql("m"))
             .replace("ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE", "ORDER BY l2_distance(m.embedding, :query_vector)")
         ).bindparams(
-            **parameters,
-            **{
-                "tag_keys": bindparam("tag_keys", expanding=True),
-                "tag_hashes": bindparam("tag_hashes", expanding=True),
-            },
+            *_search_parameters().values(),
+            *_tag_parameters().values(),
         )
 
     async def initialize(self, connection: AsyncConnection, /) -> None:
@@ -783,8 +790,18 @@ class OceanBaseMemoryHybridIndex:
         statement = self._hybrid_statements.get((tagged, limit))
         if statement is None:
             source = self._tagged_search_sql if tagged else self._search_sql
-            parameters = self._hybrid_tag_parameters if tagged else self._hybrid_parameters
-            statement = text(source.text.replace(":candidate_limit", str(limit))).bindparams(**parameters)
+            statement = text(source.text.replace(":candidate_limit", str(limit))).bindparams(
+                bindparam("memory_artifact_ids", expanding=True),
+                bindparam("query_vector", type_=VECTOR(self.profile.dimension)),
+                *(
+                    (
+                        bindparam("tag_keys", expanding=True),
+                        bindparam("tag_hashes", expanding=True),
+                    )
+                    if tagged
+                    else ()
+                ),
+            )
             self._hybrid_statements[(tagged, limit)] = statement
         return statement
 
