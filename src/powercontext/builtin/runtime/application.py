@@ -851,19 +851,28 @@ class ScopedContextApplication:
         *,
         active_entry_ids: frozenset[str] | None = None,
     ) -> list[PreparedMemoryCandidates]:
-        """Pool recalled Memory hits per scope and order them by first appearance.
+        """Order this round's recalled Memory hits by their first appearance.
 
-        New entries land at the tail of the pooled order, and entries recalled on
-        earlier rounds keep their position even when this round's ranking drops
-        them. Every pooled hit is reported against the artifact's current revision
-        so the rendered citations share one revision and the envelope can carry it
-        once instead of per item.
+        Membership is what this round's recall returned; only the *order* is carried
+        over between rounds. Ordering by first appearance is what lets the receiver
+        keep a prefix it already holds when a later round re-ranks the same entries,
+        while keeping the membership tied to the live recall is what keeps the
+        delivered body a function of the request: with the union of every hit ever
+        recalled, a full budget pins the oldest entries forever, so a query switch
+        and a newly appended entry both leave the delivered context byte-identical
+        to the previous round. A measurement sequence that has to produce several
+        distinct contexts - and that must see "Memory 追加" actually arrive - would
+        then be looking at one frozen body for all forty rounds.
+
+        Every emitted hit is reported against the artifact's current revision so the
+        rendered citations share one revision and the envelope can carry it once
+        instead of per item.
 
         ``active_entry_ids`` is the current head's live entry set. A forgotten or
-        superseded entry no longer appears in a recall, but it is still in the pool,
-        so without this check a plain forget would keep rendering the very text the
-        caller just withdrew. The first-seen index is kept on purpose: if the entry
-        comes back, it returns to the position the receiver already knows.
+        superseded entry no longer appears in a recall, but it stays in the pool, so
+        without this check a stale hit could be revived by a later recall. The
+        first-seen index is kept on purpose: if the entry comes back, it returns to
+        the position the receiver already knows.
         """
 
         merged: list[PreparedMemoryCandidates] = []
@@ -872,14 +881,20 @@ class ScopedContextApplication:
             if active_entry_ids is not None:
                 for entry_id in [item for item in pool if item not in active_entry_ids]:
                     del pool[entry_id]
+            recalled: dict[str, MemoryHit] = {}
             for hit in group.hits:
                 if hit.entry_id not in first_seen:
                     first_seen[hit.entry_id] = len(first_seen)
                 previous = pool.get(hit.entry_id)
                 if previous is None or previous.entry_version_id != hit.entry_version_id:
                     pool[hit.entry_id] = hit
+                if active_entry_ids is not None and hit.entry_id not in active_entry_ids:
+                    continue
+                # The first occurrence is the best-ranked one: the hit list is the
+                # recall's own ranking, and only its first copy of an entry is news.
+                recalled.setdefault(hit.entry_id, hit)
             ordered: list[tuple[int, str, MemoryHit]] = []
-            for entry_id, hit in pool.items():
+            for entry_id, hit in recalled.items():
                 if group.memory_ref is not None and hit.memory_ref != group.memory_ref:
                     hit = hit.model_copy(update={"memory_ref": group.memory_ref})
                 ordered.append((first_seen.get(entry_id, len(first_seen)), entry_id, hit))
@@ -1092,16 +1107,18 @@ class ScopedContextApplication:
             )
         # Both the plain and the incremental build share one body. The incremental
         # protocol is graded on rebuilding what ``prepare`` returns, so if the two paths
-        # ordered candidates differently the rebuild could never match. Pooling is
-        # therefore applied to every non-assembly preparation: an entry keeps the
-        # position it shipped at, and this round's ranking only decides which *new*
-        # entries join the tail. Without it, every reshuffle invalidated all chunks
-        # after the first moved entry and the delta carried most of the body.
+        # ordered candidates differently the rebuild could never match. Ordering by
+        # first appearance is therefore applied to every non-assembly preparation: a
+        # candidate that survives two consecutive rounds keeps the chunk position it
+        # already shipped at, so a re-rank does not invalidate every chunk after the
+        # first moved entry. Membership is still this round's recall, so a query switch
+        # and a freshly appended entry both reach the delivered body.
         #
         # An explicit assembly is exempt. Its caller states the section limits it wants
-        # and expects this round's best hits to fill them; pooling would push a newly
-        # recalled entry behind everything ever seen and the section limit would then
-        # truncate exactly the entry the query asked for.
+        # and expects this round's best hits to fill them; first-seen ordering would
+        # otherwise push a newly recalled entry behind entries that arrived earlier and
+        # this round's selection would then truncate exactly the entry the query asked
+        # for.
         if request.assembly is None:
             active_entry_ids = await self._active_memory_entry_ids()
             memory_candidates = _limit_memory_candidates(
