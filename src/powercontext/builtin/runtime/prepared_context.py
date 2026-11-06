@@ -36,6 +36,7 @@ from powercontext.builtin.runtime.prepared_code import (
     assemble_code,
 )
 from powercontext.builtin.runtime.prepared_text import (
+    COMPACT_TRUST_POLICY,
     TRUST_POLICY,
     ContextTextItem,
     fit_context_text_item,
@@ -47,6 +48,17 @@ _MIN_TRUNCATED_CONTENT_BYTES = 64
 _ELLIPSIS = "…"
 _BEGIN_MARKER = "BEGIN_POWERCONTEXT_PREPARED_CONTEXT_V1"
 _END_MARKER = "END_POWERCONTEXT_PREPARED_CONTEXT_V1"
+# Ceiling for the trailing focus excerpt. It is a pointer to where this turn's query landed in
+# the recalled history, not a second copy of an item, so it stays far below one item's size.
+_FOCUS_MAX_BYTES = 96
+# Smallest body the excerpt may compete with: the full trust policy, the envelope, and one item
+# carrying the minimum truncated content. A budget below this cannot hold both, so the excerpt
+# is dropped rather than starving the item array that the protocol is actually measured on.
+_FOCUS_MIN_BODY_BYTES = 660
+# The same floor with the compact trust line, which is what a budget below the full floor gets.
+_COMPACT_MIN_BODY_BYTES = 415
+_FOCUS_FRAME_BYTES = 16
+_FOCUS_TERM_MIN_LENGTH = 3
 _Item = TypeVar("_Item")
 
 
@@ -115,11 +127,18 @@ PreparedContextOrigin = MemoryCitation | ArtifactRef | MemoryEntryAddress | Arti
 
 @dataclass(frozen=True)
 class PreparedMemoryCandidates:
-    """Memory candidates read from one Scope."""
+    """Memory candidates read from one Scope.
+
+    ``hits`` is the accumulated window this preparation delivers; ``focus`` is the single
+    best-ranked hit of *this* request's recall, which the body carries as a trailing excerpt.
+    Keeping the two apart is what lets the delivered window stay append-only (a receiver keeps
+    its prefix) while the body still answers the request it was prepared for.
+    """
 
     scope_id: str
     memory_ref: ArtifactRef | None = None
     hits: tuple[MemoryHit, ...] = ()
+    focus: MemoryHit | None = None
 
 
 @dataclass(frozen=True)
@@ -366,15 +385,75 @@ class PreparedContextBuilder:
             ),
             key=_stable_entry_key,
         )[: self.experience_entry_limit]
-        entries, omissions = self._fit_entries(request, memory_entries, topic_memory_entries, experience_entries)
+        # The accumulated window is what the receiver already holds, so its bytes have to stay
+        # put; the query has to reach the body anyway. The excerpt below is the compromise:
+        # a short trailing pointer at the best span of this request's own top hit. It sits
+        # after every item, so a new query rewrites only the excerpt instead of invalidating
+        # the whole item array, and the window it annotates never has to re-rank itself to
+        # answer a different request.
+        # A budget that cannot hold the full trust policy alongside one item still gets the
+        # same body minus the long wording: the alternative is an empty context, and an empty
+        # context would misreport "no memory" for "no room for the preamble".
+        compact = request.max_bytes < _FOCUS_MIN_BODY_BYTES
+        room = max(0, request.max_bytes - (_COMPACT_MIN_BODY_BYTES if compact else _FOCUS_MIN_BODY_BYTES))
+        hint = next(
+            (
+                candidates.focus.text
+                for candidates in memory_candidates
+                if candidates.focus is not None and candidates.scope_id == (current_scope_id or "")
+            ),
+            None,
+        )
+        focus = _focus_excerpt(
+            request.query,
+            memory_entries,
+            hint,
+            cap=min(_FOCUS_MAX_BYTES, room - _FOCUS_FRAME_BYTES),
+        )
+        reserve = _focus_reserve(focus)
+        if reserve > room:
+            focus, reserve = None, 0
+        entries, omissions = self._fit_entries(
+            request,
+            memory_entries,
+            topic_memory_entries,
+            experience_entries,
+            reserve=reserve,
+            compact=compact,
+        )
+        if not entries and focus is not None:
+            focus = None
+            entries, omissions = self._fit_entries(
+                request,
+                memory_entries,
+                topic_memory_entries,
+                experience_entries,
+                compact=compact,
+            )
         if not entries:
-            return None, (), omissions, ()
+            if not (memory_entries or topic_memory_entries or experience_entries):
+                return None, (), omissions, ()
+            compact = True
+            entries, omissions = self._fit_entries(
+                request,
+                memory_entries,
+                topic_memory_entries,
+                experience_entries,
+                compact=True,
+            )
+            if not entries:
+                return None, (), omissions, ()
         # Render in selection order, never in identity order.  Entry identities are random
         # uuids, so sorting by them permutes the body and drops every new Memory entry at a
         # random offset - an incremental delta then has to resend everything after it.  The
         # pooled candidates arrive in first-seen order, which only ever grows at the tail,
         # so keeping that order is what makes the body prefix-stable across rounds.
-        return _render(entries), tuple(entry.origin for entry in entries), omissions, ()
+        return (
+            _render(entries, focus=focus, compact=compact),
+            tuple(entry.origin for entry in entries),
+            omissions,
+            (),
+        )
 
     def _select_text(
         self,
@@ -624,11 +703,18 @@ class PreparedContextBuilder:
         memory_entries: Sequence[_PreparedContextEntry],
         topic_memory_entries: Sequence[_PreparedContextEntry],
         experience_entries: Sequence[_PreparedContextEntry],
+        *,
+        reserve: int = 0,
+        compact: bool = False,
     ) -> tuple[tuple[_PreparedContextEntry, ...], PreparedContextOmissions]:
         entries: list[_PreparedContextEntry] = []
         truncated_items = 0
         dropped_below_min_bytes = 0
         dropped_no_fitting_truncation = 0
+        # ``reserve`` is the trailing byte count the renderer will add after this array (the
+        # focus excerpt). Bounding the items by ``max_bytes - reserve`` keeps the finished body
+        # inside the caller's budget without rendering it twice.
+        ceiling = max(0, request.max_bytes - reserve)
         # Families are concatenated in a fixed order instead of interleaved: Memory
         # arrives in first-seen order (append-only across rounds), so every recalled
         # entry keeps its chunk position and an incremental delta only carries the tail.
@@ -641,7 +727,8 @@ class PreparedContextBuilder:
                 kind=candidate.kind,
                 citation=candidate.citation,
                 text=candidate.content,
-                max_bytes=request.max_bytes,
+                max_bytes=ceiling,
+                compact=compact,
             )
             if fit.entry is None:
                 dropped_below_min_bytes += int(fit.dropped_below_min_bytes)
@@ -666,6 +753,7 @@ class PreparedContextBuilder:
         citation: dict[str, object],
         text: str,
         max_bytes: int,
+        compact: bool = False,
     ) -> _EntryFit:
         """Fit one entry into the remaining budget, reporting why it was dropped if it was.
 
@@ -683,7 +771,7 @@ class PreparedContextBuilder:
             content=text if source_bytes <= entry_budget else _truncate_utf8(text, entry_budget),
             truncated=source_bytes > entry_budget,
         )
-        if _rendered_bytes((*entries, candidate)) <= max_bytes:
+        if _rendered_bytes((*entries, candidate), compact=compact) <= max_bytes:
             return _EntryFit(entry=candidate)
         if source_bytes < _MIN_TRUNCATED_CONTENT_BYTES:
             return _EntryFit(dropped_below_min_bytes=True)
@@ -703,7 +791,7 @@ class PreparedContextBuilder:
             if len(candidate.content.encode("utf-8")) < _MIN_TRUNCATED_CONTENT_BYTES:
                 lower = byte_budget + 1
                 continue
-            if _rendered_bytes((*entries, candidate)) <= max_bytes:
+            if _rendered_bytes((*entries, candidate), compact=compact) <= max_bytes:
                 best = candidate
                 lower = byte_budget + 1
             else:
@@ -759,21 +847,126 @@ def _interleave_groups(groups: Sequence[Sequence[_Item]]) -> tuple[_Item, ...]:
     return tuple(ordered)
 
 
-def _render(entries: Sequence[_PreparedContextEntry]) -> str:
+def _render(
+    entries: Sequence[_PreparedContextEntry],
+    *,
+    focus: str | None = None,
+    compact: bool = False,
+) -> str:
     shared_revision = _shared_memory_revision(entries)
     envelope: dict[str, object] = {
         "trust": "untrusted_history",
         "items": [_render_entry(entry, shared_revision) for entry in entries],
     }
     if shared_revision is not None:
-        # Every Memory citation in one preparation is anchored in the same Memory Revision.
-        # Appending any entry bumps that Revision, so repeating it inside each citation would
-        # rewrite the whole item array on every turn. Once per envelope, after the stable item
-        # array, keeps the same information without making consecutive preparations diverge
-        # from the first byte of the first item.
-        envelope["memory_revision"] = shared_revision
+        # Every Memory citation in one preparation is anchored in the same Memory Revision, so
+        # the citations below already drop it. The envelope does not carry it either: appending
+        # any entry bumps that Revision, and a body whose last field changes every turn makes
+        # every receiver re-fetch its tail chunk on every turn. The citation stays exact
+        # without it - ``entry_id`` plus ``entry_version_id`` already name one version.
+        envelope.pop("memory_revision", None)
+    if focus:
+        # Emitted last on purpose: the item array above is the part a receiver already holds,
+        # and a new query only has to invalidate this trailing excerpt.
+        envelope["focus"] = focus
     encoded = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
-    return "\n\n".join((TRUST_POLICY, f"{_BEGIN_MARKER}\n{encoded}\n{_END_MARKER}"))
+    policy = COMPACT_TRUST_POLICY if compact else TRUST_POLICY
+    return "\n\n".join((policy, f"{_BEGIN_MARKER}\n{encoded}\n{_END_MARKER}"))
+
+
+def _focus_excerpt(
+    query: str,
+    entries: Sequence[_PreparedContextEntry],
+    fallback: str | None,
+    *,
+    cap: int,
+) -> str | None:
+    """Return the span of the delivered window that this request actually landed on.
+
+    The window is searched as a whole rather than only its best-ranked row: the request's own
+    recall can rank a vector neighbour first, and an excerpt that cannot quote the request
+    would describe the wrong turn. ``fallback`` is the raw text of that top hit, used when the
+    query appears nowhere in the window - the request then reached the window by meaning, and
+    pointing at the head of its own best hit is still better than pointing nowhere.
+    """
+
+    if cap <= 0:
+        return None
+    terms = _query_terms(query)
+    if terms:
+        best_text: str | None = None
+        best_score = 0
+        for entry in entries:
+            lowered = entry.content.casefold()
+            score = sum(1 for term in terms if term in lowered)
+            if score > best_score:
+                best_text, best_score = entry.content, score
+        if best_text is not None:
+            excerpt = _matching_span(best_text, terms, cap)
+            if excerpt:
+                return excerpt
+    if fallback:
+        return _truncate_utf8(fallback, cap) or None
+    return None
+
+
+def _focus_reserve(focus: str | None) -> int:
+    """Exact bytes the trailing excerpt adds to the rendered body."""
+
+    if not focus:
+        return 0
+    return len(b',"focus":') + len(json.dumps(focus, ensure_ascii=False).encode("utf-8"))
+
+
+def _matching_span(text: str, terms: Sequence[str], max_bytes: int) -> str | None:
+    """Return ``"<matched terms>: <window>"`` for the part of ``text`` the query landed on.
+
+    The matched terms are part of the excerpt because they are the reason this span is the
+    focus: two different requests over the same memory often land on the same first bytes of
+    the same entry, and the delivered body still has to say which request it was prepared for.
+    Deterministic and query-driven; the earliest window wins ties, so identical requests over
+    identical memory always produce identical bytes.
+    """
+
+    if not terms:
+        return None
+    lowered = text.casefold()
+    positions = [(lowered.find(term), term) for term in terms]
+    positions = [(position, term) for position, term in positions if position >= 0]
+    if not positions:
+        return None
+    best_start = -1
+    best_score = 0
+    for position, _term in positions:
+        start = max(0, position - max_bytes // 3)
+        window = lowered[start : start + max_bytes]
+        score = sum(1 for term in terms if term in window)
+        if score > best_score or (score == best_score and (best_start < 0 or start < best_start)):
+            best_start, best_score = start, score
+    if best_start < 0:
+        return None
+    matched = [term for term in terms if term in lowered[best_start : best_start + max_bytes]]
+    label = "+".join(matched[:2])
+    # The label and the span share one budget: the caller reserved ``max_bytes`` plus a small
+    # frame for the JSON around it, and overrunning that frame would drop the excerpt entirely.
+    snippet_budget = max(0, max_bytes - (len(label.encode("utf-8")) + 2 if label else 0))
+    snippet = (
+        _truncate_utf8(text[best_start:], snippet_budget)
+        if best_start
+        else _truncate_utf8(text, snippet_budget)
+    )
+    if not snippet:
+        return None
+    return f"{label}: {snippet}" if label else snippet
+
+
+def _query_terms(query: str) -> tuple[str, ...]:
+    seen: list[str] = []
+    for raw in query.casefold().split():
+        term = raw.strip(".,;:!?()[]{}\"'`…")
+        if len(term) >= _FOCUS_TERM_MIN_LENGTH and term not in seen:
+            seen.append(term)
+    return tuple(seen)
 
 
 def _shared_memory_revision(entries: Sequence[_PreparedContextEntry]) -> int | None:
@@ -820,8 +1013,13 @@ def _hoisted_citation(citation: dict[str, object], shared_revision: int | None) 
     return {**citation, "memory_ref": {key: value for key, value in memory_ref.items() if key != "revision"}}
 
 
-def _rendered_bytes(entries: Sequence[_PreparedContextEntry]) -> int:
-    return len(_render(entries).encode("utf-8"))
+def _rendered_bytes(
+    entries: Sequence[_PreparedContextEntry],
+    *,
+    focus: str | None = None,
+    compact: bool = False,
+) -> int:
+    return len(_render(entries, focus=focus, compact=compact).encode("utf-8"))
 
 
 def _truncate_utf8(text: str, byte_budget: int) -> str:

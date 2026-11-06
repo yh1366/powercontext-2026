@@ -415,22 +415,27 @@ def test_builder_truncates_unicode_and_owns_the_final_output_budget() -> None:
     assert str(item["content"]).endswith("…")
 
 
-def test_builder_does_not_accept_truncated_unicode_below_the_minimum_byte_size() -> None:
+def test_builder_answers_the_smallest_budget_instead_of_reporting_empty() -> None:
     hit = _hit("emoji", "🙂" * 200)
 
-    too_small = PreparedContextBuilder().build(
+    # "Empty" means "no memory to deliver". A budget so small that the long trust policy has
+    # to give way is not the same thing: the caller did have memory, so it gets a short body.
+    smallest = PreparedContextBuilder().build(
         memory_ref=MEMORY_REF,
         hits=(hit,),
-        request=PrepareContextRequest(query="emoji", max_bytes=590),
+        request=PrepareContextRequest(query="emoji", max_bytes=512),
     )
-    large_enough = PreparedContextBuilder().build(
+    no_hits = PreparedContextBuilder().build(
         memory_ref=MEMORY_REF,
-        hits=(hit,),
-        request=PrepareContextRequest(query="emoji", max_bytes=594),
+        hits=(),
+        request=PrepareContextRequest(query="emoji", max_bytes=512),
     )
 
-    assert too_small.status == "empty"
-    item = _items(large_enough.content)[0]
+    assert no_hits.status == "empty"
+    assert smallest.status == "ready"
+    assert smallest.content_bytes <= 512
+    item = _items(smallest.content)[0]
+    assert item["truncated"] is True
     assert len(item["content"].encode("utf-8")) >= 64
 
 

@@ -849,24 +849,26 @@ class ScopedContextApplication:
         self,
         candidates: Sequence[PreparedMemoryCandidates],
         *,
+        query: str = "",
         active_entry_ids: frozenset[str] | None = None,
     ) -> list[PreparedMemoryCandidates]:
-        """Order this round's recalled Memory hits by their first appearance.
+        """Order the accumulated Memory window by first appearance and flag this round's best hit.
 
-        Membership is what this round's recall returned; only the *order* is carried
-        over between rounds. Ordering by first appearance is what lets the receiver
-        keep a prefix it already holds when a later round re-ranks the same entries,
-        while keeping the membership tied to the live recall is what keeps the
-        delivered body a function of the request: with the union of every hit ever
-        recalled, a full budget pins the oldest entries forever, so a query switch
-        and a newly appended entry both leave the delivered context byte-identical
-        to the previous round. A measurement sequence that has to produce several
-        distinct contexts - and that must see "Memory 追加" actually arrive - would
-        then be looking at one frozen body for all forty rounds.
+        The delivered items are the *accumulated* window, not just this round's recall: every
+        entry a recall has ever surfaced stays in the pool until the head stops referencing it,
+        and keeps the position it first occupied. That is what makes the body append-only, and
+        an append-only body is the only shape a prefix protocol can compress - a re-ranked
+        membership rewrites the array from its first element every time the query changes.
 
-        Every emitted hit is reported against the artifact's current revision so the
-        rendered citations share one revision and the envelope can carry it once
-        instead of per item.
+        The query still has to reach the body, so this round's top hit travels alongside as
+        ``focus``: the builder renders it as a short trailing excerpt. A query switch then
+        costs the excerpt instead of the whole item array, and a memory append still shows up
+        at the tail it belongs to.
+
+        Every emitted hit keeps the version the pool holds for it, and the citation a body
+        renders names that version exactly - ``entry_id`` plus ``entry_version_id``. The pool
+        is re-anchored to this round's Memory head for the same reason: a stale revision in one
+        citation would make the whole item array differ from the previous round's.
 
         ``active_entry_ids`` is the current head's live entry set. A forgotten or
         superseded entry no longer appears in a recall, but it stays in the pool, so
@@ -875,38 +877,51 @@ class ScopedContextApplication:
         the position the receiver already knows.
         """
 
-        merged: list[PreparedMemoryCandidates] = []
-        for group in candidates:
-            pool, first_seen = self._runtime._context_memory_pool(group.scope_id)
-            if active_entry_ids is not None:
-                for entry_id in [item for item in pool if item not in active_entry_ids]:
-                    del pool[entry_id]
-            recalled: dict[str, MemoryHit] = {}
-            for hit in group.hits:
-                if hit.entry_id not in first_seen:
-                    first_seen[hit.entry_id] = len(first_seen)
-                previous = pool.get(hit.entry_id)
-                if previous is None or previous.entry_version_id != hit.entry_version_id:
-                    pool[hit.entry_id] = hit
-                if active_entry_ids is not None and hit.entry_id not in active_entry_ids:
-                    continue
-                # The first occurrence is the best-ranked one: the hit list is the
-                # recall's own ranking, and only its first copy of an entry is news.
-                recalled.setdefault(hit.entry_id, hit)
-            ordered: list[tuple[int, str, MemoryHit]] = []
-            for entry_id, hit in recalled.items():
-                if group.memory_ref is not None and hit.memory_ref != group.memory_ref:
-                    hit = hit.model_copy(update={"memory_ref": group.memory_ref})
-                ordered.append((first_seen.get(entry_id, len(first_seen)), entry_id, hit))
-            ordered.sort()
-            merged.append(
-                PreparedMemoryCandidates(
-                    scope_id=group.scope_id,
-                    memory_ref=group.memory_ref,
-                    hits=tuple(hit for _, _, hit in ordered),
-                )
-            )
-        return merged
+        query_terms = _query_terms(query)
+        return [self._merge_group(group, query_terms, active_entry_ids) for group in candidates]
+
+    def _merge_group(
+        self,
+        group: PreparedMemoryCandidates,
+        query_terms: Sequence[str],
+        active_entry_ids: frozenset[str] | None,
+    ) -> PreparedMemoryCandidates:
+        """Fold one scope's recall into its accumulated window and pick this round's focus."""
+
+        pool, first_seen = self._runtime._context_memory_pool(group.scope_id)
+        if active_entry_ids is not None:
+            for entry_id in [item for item in pool if item not in active_entry_ids]:
+                del pool[entry_id]
+        focus: MemoryHit | None = None
+        focus_score = 0
+        for hit in group.hits:
+            if hit.entry_id not in first_seen:
+                first_seen[hit.entry_id] = len(first_seen)
+            previous = pool.get(hit.entry_id)
+            if previous is None or previous.entry_version_id != hit.entry_version_id:
+                pool[hit.entry_id] = hit
+            if active_entry_ids is not None and hit.entry_id not in active_entry_ids:
+                continue
+            # The focus is the hit the query actually landed on, not merely the recall's
+            # first row: a vector neighbour can rank first without containing a single
+            # query term, and an excerpt that cannot quote the query says nothing about
+            # the request. Ties keep the recall's own order.
+            score = _query_term_overlap(hit.text, query_terms)
+            if focus is None or score > focus_score:
+                focus, focus_score = hit, score
+        ordered: list[tuple[int, str, MemoryHit]] = []
+        for entry_id in pool:
+            hit = pool[entry_id]
+            if group.memory_ref is not None and hit.memory_ref != group.memory_ref:
+                hit = hit.model_copy(update={"memory_ref": group.memory_ref})
+            ordered.append((first_seen.get(entry_id, len(first_seen)), entry_id, hit))
+        ordered.sort()
+        return PreparedMemoryCandidates(
+            scope_id=group.scope_id,
+            memory_ref=group.memory_ref,
+            hits=tuple(hit for _, _, hit in ordered),
+            focus=focus,
+        )
 
     async def _active_memory_entry_ids(self) -> frozenset[str] | None:
         """Return the entry ids the current Memory head still references.
@@ -1111,8 +1126,9 @@ class ScopedContextApplication:
         # first appearance is therefore applied to every non-assembly preparation: a
         # candidate that survives two consecutive rounds keeps the chunk position it
         # already shipped at, so a re-rank does not invalidate every chunk after the
-        # first moved entry. Membership is still this round's recall, so a query switch
-        # and a freshly appended entry both reach the delivered body.
+        # first moved entry. Membership is the accumulated window, so the array only ever
+        # grows at its tail; the request still reaches the body through this round's
+        # ``focus`` hit, which is rendered after every item.
         #
         # An explicit assembly is exempt. Its caller states the section limits it wants
         # and expects this round's best hits to fill them; first-seen ordering would
@@ -1122,7 +1138,11 @@ class ScopedContextApplication:
         if request.assembly is None:
             active_entry_ids = await self._active_memory_entry_ids()
             memory_candidates = _limit_memory_candidates(
-                self._merge_memory_candidates(memory_candidates, active_entry_ids=active_entry_ids),
+                self._merge_memory_candidates(
+                    memory_candidates,
+                    query=request.query,
+                    active_entry_ids=active_entry_ids,
+                ),
                 builder.memory_candidate_limit,
             )
         code = await self._code_candidates(request) if request.include_code else ()
@@ -1672,6 +1692,26 @@ class ScopedContextApplication:
             )
 
 
+def _query_terms(query: str) -> tuple[str, ...]:
+    """Split a query into the lowercase word forms a body can quote."""
+
+    terms: list[str] = []
+    for raw in query.casefold().split():
+        term = raw.strip(".,;:!?()[]{}\"'`…")
+        if len(term) >= 3 and term not in terms:
+            terms.append(term)
+    return tuple(terms)
+
+
+def _query_term_overlap(text: str, terms: Sequence[str]) -> int:
+    """How many distinct query terms appear verbatim in ``text``."""
+
+    if not terms:
+        return 0
+    lowered = text.casefold()
+    return sum(1 for term in terms if term in lowered)
+
+
 def _limit_memory_candidates(
     candidates: list[PreparedMemoryCandidates],
     limit: int,
@@ -1682,6 +1722,9 @@ def _limit_memory_candidates(
             scope_id=group.scope_id,
             memory_ref=group.memory_ref,
             hits=group.hits[:count],
+            # The focus hit is a pointer for the renderer, not one of the delivered items, so
+            # it is not part of the candidate count and survives the cap.
+            focus=group.focus,
         )
         for group, count in zip(candidates, counts, strict=True)
     ]
