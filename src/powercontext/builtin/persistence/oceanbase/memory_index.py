@@ -21,6 +21,7 @@ import logging
 from pyobvector import VECTOR, VectorIndex
 from sqlalchemy import (
     BigInteger,
+    BindParameter,
     Column,
     MetaData,
     Table,
