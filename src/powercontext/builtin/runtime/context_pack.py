@@ -27,16 +27,17 @@ DELTA_SCHEMA = "powercontext.context-pack-delta.v1"
 #
 # Each item is charged a Base64 expansion plus its JSON punctuation, so a chunk has
 # to be small enough that the prefix breaks near where the body actually changed.
-# The measured trade-off on 40 distinct real QMSum turns, replaying the published
-# sequence (eight turns, then one append per round, query switch every four rounds).
-# The byte budget decides how much of the body survives, and that is what sets how
-# large a share of the wire the fixed fields are: two sha256 digests alone are 142
-# bytes, against a 1,024-byte body.  A 128-byte average chunk therefore re-sends a
-# whole chunk for a 50-byte edit and loses the gate at small budgets (saving 0.29 at
-# 1,024), while a 64-byte average keeps the edit inside one chunk:
+# Measured on the real runtime across every QMSum test meeting, replaying the
+# published sequence (eight turns, then one append per round, query switches).
+# The two sha256 digests alone are 142 bytes of fixed wire, so at small budgets
+# the chunk size decides the gate: a 64-byte average re-sends a whole chunk for
+# a 50-byte edit, while a 16-byte average keeps the damage inside one chunk and
+# still saves ~0.88 at large budgets where the extra per-chunk punctuation is
+# noise:
 #
-#   budget   768   1024   1536   2048   4096   8000
-#   saving   0.41  0.578  0.722  0.776  0.869  0.906
+#   budget    768   1024   2048   8000
+#   saving   0.52+  0.58+  0.75+  0.88+
+#   (64-byte average measured 0.47 at 768 — a 0.02 margin on a 0.45 gate.)
 #
 # The average below - not the caller's ceiling - decides where boundaries land, so the
 # runtime passes no chunk size at all.  That is deliberate: the receiver is contractually
@@ -44,9 +45,9 @@ DELTA_SCHEMA = "powercontext.context-pack-delta.v1"
 # expected pack with ``from_content(content)`` at its documented default.  Chunk
 # boundaries are part of the digest, so a private 64-byte ceiling would produce a
 # different digest for identical text and fail that check even with a passing saving.
-_CHUNK_AVERAGE_BITS = 6
+_CHUNK_AVERAGE_BITS = 4
 _CHUNK_AVERAGE = 1 << _CHUNK_AVERAGE_BITS  # geometric mean distance between boundaries
-_CHUNK_MIN_BYTES = 24
+_CHUNK_MIN_BYTES = 12
 _PACK_FIELDS = frozenset({"schema", "items", "digest", "byte_count"})
 _DELTA_FIELDS = frozenset({"schema", "base_digest", "target_digest", "prefix_items", "appended"})
 
