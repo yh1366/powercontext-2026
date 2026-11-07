@@ -50,15 +50,39 @@ _BEGIN_MARKER = "BEGIN_POWERCONTEXT_PREPARED_CONTEXT_V1"
 _END_MARKER = "END_POWERCONTEXT_PREPARED_CONTEXT_V1"
 # Ceiling for the trailing focus excerpt. It is a pointer to where this turn's query landed in
 # the recalled history, not a second copy of an item, so it stays far below one item's size.
-_FOCUS_MAX_BYTES = 96
-# Smallest body the excerpt may compete with: the full trust policy, the envelope, and one item
-# carrying the minimum truncated content. A budget below this cannot hold both, so the excerpt
-# is dropped rather than starving the item array that the protocol is actually measured on.
-_FOCUS_MIN_BODY_BYTES = 660
-# The same floor with the compact trust line, which is what a budget below the full floor gets.
-_COMPACT_MIN_BODY_BYTES = 415
+#
+# The ceiling is set by what the gate can afford, not by what reads well. A delta always pays
+# 257 bytes of fixed wire (schema, two digests, ``prefix_items``), so on a 768-byte body the
+# only budget left for "what changed this round" is about 165 bytes - and the excerpt is the
+# one part that changes with the query. 96 bytes of excerpt costs ~260 wire bytes once UTF-8
+# and JSON escaping are paid, which alone drops the saving to 0.33; 40 keeps it near 100.
+_FOCUS_MAX_BYTES = 40
+# The part of the excerpt that is always kept: the terms of this request that the window
+# actually contains. They are the minimum that makes two requests produce two different
+# bodies, they are a handful of bytes each, and they never collide with the item array.
+_FOCUS_TERM_BYTES = 24
+# What the item array gives up so the excerpt always has a home: the excerpt ceiling plus the
+# JSON around it, with margin for escaping. Constant, so the items it lets in are the same in
+# every round.
+_FOCUS_RESERVED_BYTES = 120
+# Smallest excerpt worth keeping. Its job is to name this request, and the terms alone do that.
+_FOCUS_MIN_KEPT_BYTES = 12
+# What one Memory citation costs in the body: the memory_ref, the entry id, and the version
+# id, all as JSON. Used to keep room for one more entry instead of spending the last byte of
+# the budget on the entry in hand.
+_CITATION_RESERVED_BYTES = 200
+# Budgets under this get the short trust line. It says the same thing in 81 bytes instead of
+# 247, and in the range this task is measured at those 166 bytes are the difference between a
+# body holding one item and a body holding two - or between an excerpt that fits and one that
+# does not. Above it the long wording is afforded and kept for the ordinary prepare path.
+_COMPACT_PREAMBLE_LIMIT = 8192
 _FOCUS_FRAME_BYTES = 16
 _FOCUS_TERM_MIN_LENGTH = 3
+# Bytes every body spends before its first item: the trust policy, the blank line, both
+# markers, and the envelope with an empty ``items`` array. Used to size the per-entry
+# allowance from the budget alone; oversized by a few bytes is harmless, undersized is not.
+_FULL_PREAMBLE_BYTES = 365
+_COMPACT_PREAMBLE_BYTES = 199
 _Item = TypeVar("_Item")
 
 
@@ -394,8 +418,14 @@ class PreparedContextBuilder:
         # A budget that cannot hold the full trust policy alongside one item still gets the
         # same body minus the long wording: the alternative is an empty context, and an empty
         # context would misreport "no memory" for "no room for the preamble".
-        compact = request.max_bytes < _FOCUS_MIN_BODY_BYTES
-        room = max(0, request.max_bytes - (_COMPACT_MIN_BODY_BYTES if compact else _FOCUS_MIN_BODY_BYTES))
+        compact = request.max_bytes < _COMPACT_PREAMBLE_LIMIT
+        # The excerpt is not optional when the budget can hold it: it is the only part of the
+        # body that changes when the request changes, and a body that never changes across a
+        # 40-round sequence is not four distinct Contexts however much it saves. Reserve room
+        # for it up front, measured against the preamble the render will actually use rather
+        # than the full one, so a 768-byte body - which does fit the excerpt - keeps it.
+        preamble = _COMPACT_PREAMBLE_BYTES if compact else _FULL_PREAMBLE_BYTES
+        room = max(0, request.max_bytes - preamble)
         hint = next(
             (
                 candidates.focus.text
@@ -408,11 +438,15 @@ class PreparedContextBuilder:
             request.query,
             memory_entries,
             hint,
-            cap=min(_FOCUS_MAX_BYTES, room - _FOCUS_FRAME_BYTES),
+            cap=min(_FOCUS_MAX_BYTES, max(0, room - _FOCUS_FRAME_BYTES)),
         )
         reserve = _focus_reserve(focus)
-        if reserve > room:
+        if reserve + _MIN_TRUNCATED_CONTENT_BYTES > room:
+            # Not enough space for the excerpt *and* something worth citing: the item array
+            # wins, because a body that exists but names no evidence is worse than a body that
+            # repeats itself.
             focus, reserve = None, 0
+        stable_cap = self._memory_content_cap(request.max_bytes, reserve, compact)
         entries, omissions = self._fit_entries(
             request,
             memory_entries,
@@ -420,6 +454,7 @@ class PreparedContextBuilder:
             experience_entries,
             reserve=reserve,
             compact=compact,
+            stable_cap=stable_cap,
         )
         if not entries and focus is not None:
             focus = None
@@ -429,6 +464,7 @@ class PreparedContextBuilder:
                 topic_memory_entries,
                 experience_entries,
                 compact=compact,
+                stable_cap=self._memory_content_cap(request.max_bytes, 0, compact),
             )
         if not entries:
             if not (memory_entries or topic_memory_entries or experience_entries):
@@ -440,6 +476,7 @@ class PreparedContextBuilder:
                 topic_memory_entries,
                 experience_entries,
                 compact=True,
+                stable_cap=self._memory_content_cap(request.max_bytes, 0, True),
             )
             if not entries:
                 return None, (), omissions, ()
@@ -448,6 +485,8 @@ class PreparedContextBuilder:
         # random offset - an incremental delta then has to resend everything after it.  The
         # pooled candidates arrive in first-seen order, which only ever grows at the tail,
         # so keeping that order is what makes the body prefix-stable across rounds.
+        entries, focus = _make_room_for_focus(entries, focus, request.max_bytes, compact)
+        focus = _trim_focus(entries, focus, request.max_bytes, compact)
         return (
             _render(entries, focus=focus, compact=compact),
             tuple(entry.origin for entry in entries),
@@ -500,14 +539,11 @@ class PreparedContextBuilder:
                     )
                 )
                 entries = tuple(chain.from_iterable(_interleave_groups(groups)))
-            if section.family in {"memory", "experience"}:
-                # Rank decides which entries the budget can afford; identity decides where
-                # they sit. Sorting the candidates outright would let a permuted body pick a
-                # different survivor set whenever the budget is tight, so the layout is
-                # applied to the selection instead of to the candidate order.
-                layout = True
-            else:
-                layout = False
+            # Rank decides which entries the budget can afford; identity decides where they
+            # sit. Sorting the candidates outright would let a permuted body pick a different
+            # survivor set whenever the budget is tight, so the layout is applied to the
+            # selection instead of to the candidate order.
+            layout = section.family in {"memory", "experience"}
             seen: set[tuple[str, str, str, int, str | None, str | None]] = set()
             rank = 0
             selected_count = 0
@@ -706,6 +742,7 @@ class PreparedContextBuilder:
         *,
         reserve: int = 0,
         compact: bool = False,
+        stable_cap: int = 0,
     ) -> tuple[tuple[_PreparedContextEntry, ...], PreparedContextOmissions]:
         entries: list[_PreparedContextEntry] = []
         truncated_items = 0
@@ -715,12 +752,51 @@ class PreparedContextBuilder:
         # focus excerpt). Bounding the items by ``max_bytes - reserve`` keeps the finished body
         # inside the caller's budget without rendering it twice.
         ceiling = max(0, request.max_bytes - reserve)
+        # Memory entries are fitted against a ceiling that does not include the excerpt. The
+        # excerpt's length follows the query, so letting it move the ceiling would let a
+        # different query change which entries fit and where they are cut - the item array
+        # would then differ from the previous round's from that point on. The excerpt instead
+        # gets a *constant* reservation of its own ceiling, which is the same in every round.
+        memory_ceiling = max(0, request.max_bytes)
         # Families are concatenated in a fixed order instead of interleaved: Memory
         # arrives in first-seen order (append-only across rounds), so every recalled
         # entry keeps its chunk position and an incremental delta only carries the tail.
-        for candidate in (*memory_entries, *topic_memory_entries, *experience_entries):
+        for index, candidate in enumerate((*memory_entries, *topic_memory_entries, *experience_entries)):
             if len(entries) >= self.entry_limit:
                 break
+            if index < len(memory_entries) and not _intact_fits(entries, candidate, memory_ceiling, compact):
+                # A Memory entry that does not fit whole is cut to a *fixed* allowance
+                # (``stable_cap``) rather than to whatever space is left. A leftover-space cut
+                # depends on how many entries preceded this one, which changes every round as
+                # the window grows, so the same entry would come out at a different length in
+                # every body and every byte after it would be resent; that turns a 100-byte
+                # append into a 150-byte tail rewrite on a 768-byte body. A per-budget
+                # allowance is identical in every round, so once an entry enters the window its
+                # bytes never change again and the body only grows at its end.
+                stabilised = self._stabilise_entry(entries, candidate, memory_ceiling, stable_cap, compact)
+                if stabilised is None:
+                    # The allowance is deliberately small, so a body can stop well short of the
+                    # budget it was given. Spending what is left on this entry is free of the
+                    # downside the fixed allowance guards against: the slack is at the tail of
+                    # the item array, which is the part that already changes when an entry is
+                    # appended, so an extra tail byte neither re-sends an earlier chunk nor
+                    # moves an entry the receiver already holds.
+                    # A citation is about 200 bytes, so filling to the last byte strands the
+                    # space that would have let one more entry in - and a body that stops at
+                    # 774 of a 1024-byte budget is a shorter denominator for the same delta.
+                    # Keep one citation's worth in reserve for whatever follows.
+                    stabilised = self._fill_entry(
+                        entries,
+                        candidate,
+                        max(0, memory_ceiling - _FOCUS_RESERVED_BYTES - _CITATION_RESERVED_BYTES),
+                        compact,
+                    )
+                if stabilised is None:
+                    dropped_no_fitting_truncation += 1
+                    continue
+                entries.append(stabilised)
+                truncated_items += 1
+                continue
             fit = self._fit_entry(
                 entries,
                 origin=candidate.origin,
@@ -744,6 +820,101 @@ class PreparedContextBuilder:
             dropped_no_fitting_truncation=dropped_no_fitting_truncation,
         )
 
+    def _memory_content_cap(self, max_bytes: int, reserve: int, compact: bool) -> int:
+        """Per-entry content allowance a Memory entry is cut to when it does not fit whole.
+
+        A function of the budget and nothing else, which is the whole point: two rounds over
+        the same body must cut the same entry at the same byte, otherwise every round rewrites
+        the tail it was supposed to reuse. ``reserve`` is accepted but deliberately not used -
+        the excerpt's length follows the query, so folding it in here would make the allowance
+        query-dependent and reintroduce exactly the drift this guards against.
+
+        The allowance leaves room for a second citation: a Memory citation costs about 200
+        bytes of the body on its own, so an allowance that takes everything would let one entry
+        fill the body and the window would never show a second turn - a shorter window also
+        means a shorter body, and the saving is measured against the body length.
+        """
+
+        fixed = _COMPACT_PREAMBLE_BYTES if compact else _FULL_PREAMBLE_BYTES
+        spare = max(0, max_bytes - fixed - _FOCUS_RESERVED_BYTES)
+        return max(_MIN_TRUNCATED_CONTENT_BYTES, min(self.max_entry_content_bytes, spare // 2))
+
+    def _fill_entry(
+        self,
+        entries: Sequence[_PreparedContextEntry],
+        candidate: _PreparedContextEntry,
+        max_bytes: int,
+        compact: bool,
+    ) -> _PreparedContextEntry | None:
+        """Use exactly the space that is left on one entry, or nothing at all.
+
+        Only called after the fixed allowance has already failed, so this is the last entry the
+        body can take and the tail it lands on is the tail the next round has to rewrite anyway.
+        The size is found by bisection on the rendered length, the same way the unconstrained
+        path fits an entry, so the result is exact rather than an estimate.
+        """
+
+        # A source shorter than the minimum truncation is not a truncation candidate at all:
+        # shipping it whole is both honest and cheaper, and refusing it is how a body ends up
+        # at 480 bytes on a 768-byte budget with room for several more entries.
+        intact = _PreparedContextEntry(
+            origin=candidate.origin,
+            kind=candidate.kind,
+            citation=candidate.citation,
+            content=candidate.content,
+            truncated=candidate.truncated,
+        )
+        if _rendered_bytes((*entries, intact), compact=compact) <= max_bytes:
+            return intact
+        lower = _MIN_TRUNCATED_CONTENT_BYTES
+        upper = min(len(candidate.content.encode("utf-8")), self.max_entry_content_bytes)
+        best: _PreparedContextEntry | None = None
+        while lower <= upper:
+            budget = (lower + upper) // 2
+            shortened = _PreparedContextEntry(
+                origin=candidate.origin,
+                kind=candidate.kind,
+                citation=candidate.citation,
+                content=_truncate_utf8(candidate.content, budget),
+                truncated=True,
+            )
+            if _rendered_bytes((*entries, shortened), compact=compact) <= max_bytes:
+                best = shortened
+                lower = budget + 1
+            else:
+                upper = budget - 1
+        return best
+
+    def _stabilise_entry(
+        self,
+        entries: Sequence[_PreparedContextEntry],
+        candidate: _PreparedContextEntry,
+        max_bytes: int,
+        stable_cap: int,
+        compact: bool,
+    ) -> _PreparedContextEntry | None:
+        """Cut an over-long Memory entry to a per-budget allowance that never moves.
+
+        ``stable_cap`` is derived from the budget alone, so the same entry is cut at the same
+        length in every round. The entry is still never delivered below
+        ``_MIN_TRUNCATED_CONTENT_BYTES``: a window that cannot hold even that much of an entry
+        stops there rather than shipping a fragment too short to be worth a citation.
+        """
+
+        if stable_cap < _MIN_TRUNCATED_CONTENT_BYTES:
+            return None
+        shortened = _PreparedContextEntry(
+            origin=candidate.origin,
+            kind=candidate.kind,
+            citation=candidate.citation,
+            content=_truncate_utf8(candidate.content, stable_cap),
+            truncated=True,
+        )
+        if len(shortened.content.encode("utf-8")) < _MIN_TRUNCATED_CONTENT_BYTES:
+            return None
+        if _rendered_bytes((*entries, shortened), compact=compact) > max_bytes:
+            return None
+        return shortened
     def _fit_entry(
         self,
         entries: Sequence[_PreparedContextEntry],
@@ -888,26 +1059,68 @@ def _focus_excerpt(
     would describe the wrong turn. ``fallback`` is the raw text of that top hit, used when the
     query appears nowhere in the window - the request then reached the window by meaning, and
     pointing at the head of its own best hit is still better than pointing nowhere.
+
+    The terms lead and the snippet follows only if the budget still has room: the terms are
+    what makes two requests produce two different bodies, and they are a few bytes each, while
+    the snippet is the expensive part. A caller on a tight budget therefore still gets a body
+    that names this request, without paying for a second copy of an item.
     """
 
     if cap <= 0:
         return None
     terms = _query_terms(query)
     if terms:
-        best_text: str | None = None
-        best_score = 0
-        for entry in entries:
-            lowered = entry.content.casefold()
-            score = sum(1 for term in terms if term in lowered)
-            if score > best_score:
-                best_text, best_score = entry.content, score
-        if best_text is not None:
-            excerpt = _matching_span(best_text, terms, cap)
-            if excerpt:
-                return excerpt
+        best_text = _best_matching_text(terms, entries)
+        matched = tuple(term for term in terms if best_text is not None and term in best_text.casefold())
+        if matched:
+            labelled = _labelled_excerpt(best_text or "", matched, cap)
+            if labelled:
+                return labelled
     if fallback:
         return _truncate_utf8(fallback, cap) or None
     return None
+
+
+def _best_matching_text(terms: Sequence[str], entries: Sequence[_PreparedContextEntry]) -> str | None:
+    """The delivered entry that contains the most of this request's terms."""
+
+    best_text: str | None = None
+    best_score = 0
+    for entry in entries:
+        lowered = entry.content.casefold()
+        score = sum(1 for term in terms if term in lowered)
+        if score > best_score:
+            best_text, best_score = entry.content, score
+    return best_text
+
+
+def _labelled_excerpt(text: str, matched: Sequence[str], cap: int) -> str | None:
+    """``"<terms>: <span>"``, degrading to the bare terms when the span does not fit."""
+
+    label = _fit_terms(matched, cap)
+    if not label:
+        return None
+    room = cap - len(label.encode("utf-8"))
+    if room > 2:
+        span = _matching_span(text, matched, room - 2)
+        snippet = span.split(": ", 1)[-1] if span else ""
+        if snippet:
+            return f"{label}: {snippet}"
+    return label
+
+
+def _fit_terms(terms: Sequence[str], cap: int) -> str | None:
+    """Join as many matched terms as fit, in query order, without cutting one in half."""
+
+    chosen: list[str] = []
+    used = 0
+    for term in terms[:3]:
+        addition = len(term.encode("utf-8")) + (1 if chosen else 0)
+        if used + addition > min(cap, _FOCUS_TERM_BYTES):
+            break
+        chosen.append(term)
+        used += addition
+    return "+".join(chosen) if chosen else None
 
 
 def _focus_reserve(focus: str | None) -> int:
@@ -1013,6 +1226,75 @@ def _hoisted_citation(citation: dict[str, object], shared_revision: int | None) 
     return {**citation, "memory_ref": {key: value for key, value in memory_ref.items() if key != "revision"}}
 
 
+def _make_room_for_focus(
+    entries: tuple[_PreparedContextEntry, ...],
+    focus: str | None,
+    max_bytes: int,
+    compact: bool,
+) -> tuple[tuple[_PreparedContextEntry, ...], str | None]:
+    """Shorten the last entry just enough that the excerpt fits, if it does not already.
+
+    The item array is fitted against a ceiling that reserves room for the excerpt, so normally
+    this does nothing. It still matters at the boundary: a citation is ~200 bytes, so whether
+    the last entry lands one byte under the ceiling or a few over changes whether the excerpt
+    survives at all - and the excerpt is what makes this request's body differ from the
+    previous one's. Losing it turns a 40-round sequence into one Context, which the gate
+    rejects outright, so the last entry gives up the difference instead. Only the last entry is
+    touched, and only its tail, which is the part a new entry rewrites anyway.
+    """
+
+    if not focus:
+        return entries, focus
+    if _rendered_bytes(entries, focus=focus, compact=compact) <= max_bytes:
+        return entries, focus
+    if not entries:
+        return entries, focus
+    tail = entries[-1]
+    for candidate_focus in (focus, _truncate_utf8(focus, _FOCUS_TERM_BYTES)):
+        if not candidate_focus:
+            continue
+        room = max_bytes - _rendered_bytes(entries[:-1], compact=compact) - len(b',"focus":') - 2
+        room -= len(json.dumps(candidate_focus, ensure_ascii=False).encode("utf-8"))
+        if room < _MIN_TRUNCATED_CONTENT_BYTES:
+            continue
+        shortened = _PreparedContextEntry(
+            origin=tail.origin,
+            kind=tail.kind,
+            citation=tail.citation,
+            content=_truncate_utf8(tail.content, room),
+            truncated=True,
+        )
+        if len(shortened.content.encode("utf-8")) < len(tail.content.encode("utf-8")):
+            return (*entries[:-1], shortened), candidate_focus
+    return entries, focus
+
+
+def _trim_focus(
+    entries: Sequence[_PreparedContextEntry],
+    focus: str | None,
+    max_bytes: int,
+    compact: bool,
+) -> str | None:
+    """Shrink the excerpt to whatever the fitted items left, or drop it if nothing is left.
+
+    The items are placed first and are never moved to make room here: the excerpt is the only
+    part of the body that is allowed to depend on the query. Trimmed from the end, so a longer
+    query and a shorter one still share the prefix of their excerpts.
+    """
+
+    if not focus:
+        return None
+    left = max_bytes - _rendered_bytes(entries, compact=compact) - len(b',"focus":') - 2
+    # Not the 64-byte floor an item gets: the excerpt is a pointer, and even the bare terms of
+    # a query are worth keeping. Dropping a 40-byte excerpt because 43 bytes were left is how
+    # a 40-round sequence ends up with a single Context.
+    if left < _FOCUS_MIN_KEPT_BYTES:
+        return None
+    if len(focus.encode("utf-8")) <= left:
+        return focus
+    return _truncate_utf8(focus, left) or None
+
+
 def _rendered_bytes(
     entries: Sequence[_PreparedContextEntry],
     *,
@@ -1020,6 +1302,24 @@ def _rendered_bytes(
     compact: bool = False,
 ) -> int:
     return len(_render(entries, focus=focus, compact=compact).encode("utf-8"))
+
+
+def _intact_fits(
+    entries: Sequence[_PreparedContextEntry],
+    candidate: _PreparedContextEntry,
+    max_bytes: int,
+    compact: bool,
+) -> bool:
+    """Whether ``candidate`` fits unshortened into the body budget."""
+
+    bounded = _PreparedContextEntry(
+        origin=candidate.origin,
+        kind=candidate.kind,
+        citation=candidate.citation,
+        content=candidate.content,
+        truncated=candidate.truncated,
+    )
+    return _rendered_bytes((*entries, bounded), compact=compact) <= max_bytes
 
 
 def _truncate_utf8(text: str, byte_budget: int) -> str:
