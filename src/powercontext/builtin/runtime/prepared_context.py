@@ -1064,6 +1064,13 @@ def _focus_excerpt(
     what makes two requests produce two different bodies, and they are a few bytes each, while
     the snippet is the expensive part. A caller on a tight budget therefore still gets a body
     that names this request, without paying for a second copy of an item.
+
+    Falling back to the bare terms when the window contains none of them is what keeps the
+    body request-shaped for every request. A measurement sequence draws its retrieval terms
+    from the same meeting the window is built from, so most terms do appear - but the ones
+    that do not are precisely the ones that would otherwise return ``None``, drop the excerpt,
+    and make this round's body byte-identical to the previous round's. Returning the term is
+    also honest: it names what was asked even when the window has nothing to quote for it.
     """
 
     if cap <= 0:
@@ -1076,6 +1083,16 @@ def _focus_excerpt(
             labelled = _labelled_excerpt(best_text or "", matched, cap)
             if labelled:
                 return labelled
+    # When the window contains none of this request's terms, name the request itself. The
+    # fallback sits behind the terms rather than in front of them: it is the text of the
+    # round's best hit, which is the *same* text for every request, so placing it first makes
+    # two different requests produce one byte-identical body - the failure this whole function
+    # exists to prevent. The terms are per-request by construction, cost a few bytes, and say
+    # what was actually asked.
+    if terms:
+        label = _fit_terms(terms, cap)
+        if label:
+            return label
     if fallback:
         return _truncate_utf8(fallback, cap) or None
     return None
