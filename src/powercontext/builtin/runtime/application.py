@@ -889,14 +889,28 @@ class ScopedContextApplication:
         active_entry_ids: frozenset[str] | None,
         query: str = "",
     ) -> PreparedMemoryCandidates:
-        """Fold one scope's recall into its accumulated window and pick this round's focus."""
+        """Fold one scope's recall into its accumulated window and pick this round's focus.
+
+        The window is ordered by first sighting, not by this round's ranking, so the
+        rendered item array is query-independent: a query switch moves only the trailing
+        excerpt and costs one chunk, while a ranking switch would rewrite the array from
+        its first element and re-send every chunk in it. An append lands at the tail,
+        which is exactly where a prefix-delta protocol wants the new bytes.
+
+        Every emitted hit keeps the version the pool holds for it, and the citation a
+        body renders names that version exactly. The pool is re-anchored to this round's
+        Memory head: a forgotten or superseded entry stays out even if a stale recall
+        still carries it, and its first-seen position is kept on purpose so a returning
+        entry lands where the receiver already knows it.
+        """
 
         pool, first_seen = self._runtime._context_memory_pool(group.scope_id)
         if active_entry_ids is not None:
             for entry_id in [item for item in pool if item not in active_entry_ids]:
                 del pool[entry_id]
         focus: MemoryHit | None = None
-        focus_score = 0
+        focus_score = -1
+        focus_seen = -1
         for hit in group.hits:
             if hit.entry_id not in first_seen:
                 first_seen[hit.entry_id] = len(first_seen)
@@ -908,11 +922,15 @@ class ScopedContextApplication:
             # The focus is the hit the query actually landed on, not merely the recall's
             # first row: a vector neighbour can rank first without containing a single
             # query term, and an excerpt that cannot quote the query says nothing about
-            # the request. Ties keep the recall's own order.
+            # the request. A tie goes to the newest sighting, not to the recall's own
+            # order - recall ranks an old anchor entry first more often than not, and a
+            # tie that kept it would leave the round's own append invisible in the tail.
+            # A round whose hits match no term at all quotes its newest entry, which is
+            # the append itself on a measurement sequence.
             score = _query_term_overlap(hit.text, query_terms)
-            if focus is None or score > focus_score:
-                focus, focus_score = hit, score
-        focus = self._freeze_focus(group.scope_id, query, focus)
+            seen = first_seen.get(hit.entry_id, -1)
+            if score > focus_score or (score == focus_score and seen > focus_seen):
+                focus, focus_score, focus_seen = hit, score, seen
         ordered: list[tuple[int, str, MemoryHit]] = []
         for entry_id in pool:
             hit = pool[entry_id]
@@ -926,33 +944,6 @@ class ScopedContextApplication:
             hits=tuple(hit for _, _, hit in ordered),
             focus=focus,
         )
-
-    def _freeze_focus(self, scope_id: str, query: str, candidate: MemoryHit | None) -> MemoryHit | None:
-        """Move this round's focus to the round's own best hit.
-
-        The body has to change when the request changes, and it also has to change when
-        the window itself changes: the measurement runs one append per round and asks
-        for at least four distinct Contexts, so a body that only varies with the query
-        collapses to one Context whenever the sequence repeats itself. Picking the focus
-        from the round's own recall - and keeping the hit identity in the excerpt - makes
-        the tail follow the append even at a budget that no longer has room for a new
-        item, while a genuinely repeated round (same query, same recall head) still
-        renders byte-identically and pays only the protocol floor.
-        """
-
-        state = self._runtime._context_focus_state(scope_id)
-        previous = state.focus
-        state.seen.add(query)
-        if candidate is not None:
-            state.focus = candidate
-        same = (
-            previous is not None
-            and state.focus is not None
-            and previous.entry_id == state.focus.entry_id
-            and previous.entry_version_id == state.focus.entry_version_id
-        )
-        state.moved = not same
-        return state.focus
 
     async def _memory_head_snapshot(self) -> tuple[frozenset[str], frozenset[str]] | None:
         """Return the active entry ids of the current Memory head, plus a versioned key.
@@ -1122,7 +1113,6 @@ class ScopedContextApplication:
         """
 
         builder = PreparedContextBuilder()
-        builder.focus_state_lookup = self._runtime._context_focus_state
         if request.include_code:
             builder.entry_limit = self._runtime.context_assembly_max_entries
         scope_ids = [self.scope_id, *scope.context_references]
@@ -1824,23 +1814,6 @@ def _query_term_overlap(text: str, terms: Sequence[str]) -> int:
 # long unchanged run regardless of how often the caller switches queries.
 _FOCUS_CHANGE_CAP = 0
 
-
-
-@dataclass
-class _FocusState:
-    """The focus freeze state of one scope: which queries were seen, what hit the
-    body currently carries, the excerpt rendered for it, and whether this round
-    moved the focus."""
-
-    seen: set[str] = None  # type: ignore[assignment]
-    changes: int = 0
-    focus: MemoryHit | None = None
-    excerpt: str | None = None
-    moved: bool = False
-
-    def __post_init__(self) -> None:
-        if self.seen is None:
-            self.seen = set()
 
 
 def _limit_memory_candidates(
@@ -3566,21 +3539,13 @@ class BuiltinRuntime:
         # would be empty on every round and the body would churn again.
         self._context_memory_pools: dict[str, dict[str, MemoryHit]] = {}
         self._context_memory_order: dict[str, dict[str, int]] = {}
-        # Focus freeze state (per scope). The focus excerpt is the only part of the
-        # rendered body that follows the query, so a sequence that switches queries
-        # every round would rewrite the tail - and pay a delta - forty times. The
-        # measurement only needs four distinct bodies, so the focus updates when a
-        # query is seen for the first time, up to a cap, and then freezes: rounds
-        # after the cap render the same tail as the previous round and their delta
-        # is the protocol floor.
-        self._context_focus_states: dict[str, _FocusState] = {}
         # Last prepared body per scope, guarded by the request signature *and* the live
         # Memory head. The incremental protocol only ever sends a delta against a base
         # the receiver already holds, so this call has to reproduce the previous body
         # byte for byte - and it does that by re-running ``prepare``. Recall is not
-        # guaranteed to settle the same way twice, so the second run could pool one more
-        # hit than the first, append it, and hand back a body that differs from the one
-        # the base was built from: every delta then verifies as a mismatch.
+        # guaranteed to settle the same way twice, so the second run could rank the same
+        # hits differently and hand back a body that differs from the one the base was
+        # built from: every delta then verifies as a mismatch.
         #
         # Reusing the previous result when neither the request nor the Memory head moved
         # is not a cached answer, it is the same answer: ``prepare`` is required to be
@@ -3607,14 +3572,6 @@ class BuiltinRuntime:
             pool = self._context_memory_pools[scope_id] = {}
             self._context_memory_order[scope_id] = {}
         return pool, self._context_memory_order[scope_id]
-
-    def _context_focus_state(self, scope_id: str) -> _FocusState:
-        """Return the focus freeze state of one scope, creating it on first use."""
-
-        state = self._context_focus_states.get(scope_id)
-        if state is None:
-            state = self._context_focus_states[scope_id] = _FocusState()
-        return state
 
     async def _lifecycle(self, scope_id: str) -> SourceLifecycleService:
         """Return the lifecycle service for one scope, creating its side tables once."""

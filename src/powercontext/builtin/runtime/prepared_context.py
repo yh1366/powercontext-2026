@@ -16,12 +16,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from itertools import chain
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from powercontext.artifacts import ArtifactAddress, ArtifactRef
 from powercontext.builtin.artifacts.experience import Experience, ExperienceSearchHit, render_experience
@@ -61,32 +60,11 @@ _FOCUS_MAX_BYTES = 40
 # The part of the excerpt that is always kept: the terms of this request that the window
 # actually contains. They are the minimum that makes two requests produce two different
 # bodies, they are a handful of bytes each, and they never collide with the item array.
-# Sixteen fits two ordinary terms ("remote student") next to the window marker, which is
-# all a query switch needs to show up in the tail; every byte past that is paid again on
-# each of the thirty-two rounds.
 _FOCUS_TERM_BYTES = 8
 # What the item array gives up so the excerpt always has a home: the excerpt ceiling plus the
 # JSON around it, with margin for escaping. Constant, so the items it lets in are the same in
-# every round. The ceiling is ``_FOCUS_MAX_BYTES`` (40) plus the ``new:`` marker (12), and 72
-# covers both with room for the JSON punctuation - at the 768 budget the 48 bytes this leaves
-# on the table are a whole extra Memory entry.
+# every round.
 _FOCUS_RESERVED_BYTES = 32
-# Budgets below this pay the excerpt out of the same handful of bytes the delta floor
-# leaves over, so the marker shrinks to keep the gate. 512 - the smallest budget
-# ``PrepareContextRequest`` accepts - has ~16 bytes per round to spend on it.
-_NARROW_BUDGET_BYTES = 700
-# Hex digits in the round marker. Six, not four: the measurement takes 32 increments and a
-# four-digit window collides about once in 128 sequences, and a collision merges two rounds
-# into one Context - the one failure this marker exists to prevent. Two extra bytes are
-# 0.9% of the body at a 768-byte budget.
-_ROUND_MARKER_DIGITS = 6
-# Prefix that marks the digest as this round's window label rather than memory content. One
-# byte, because at a 512-byte budget that byte is 0.4% of the saving.
-_ROUND_MARKER_PREFIX = "#"
-# Entries per marker bucket below the narrow ceiling. Eight keeps forty rounds at five
-# distinct markers - comfortably over the four the measurement asks for - while leaving
-# seven of every eight rounds on the unmodified tail.
-_NARROW_BUCKET_ENTRIES = 8
 # Smallest excerpt worth keeping. Its job is to name this request, and the terms alone do that.
 _FOCUS_MIN_KEPT_BYTES = 12
 # What one Memory citation costs in the body: the memory_ref, the entry id, and the version
@@ -219,11 +197,6 @@ class PreparedContextBuilder:
     experience_entry_limit = 2
     max_entry_content_bytes = 2000
     _text_entry_limit: int | None = None
-    # Optional hook letting the embedding runtime hand the renderer its per-scope
-    # focus-freeze state (first sighting of a query, up to a cap). The builder itself
-    # stays pure: without a lookup it simply re-renders the excerpt every round, which
-    # is the historical behavior.
-    focus_state_lookup: Callable[[str], Any] | None = None
 
     def empty(self) -> PreparedContext:
         return PreparedContext(status="empty", content=None, content_bytes=0)
@@ -284,7 +257,6 @@ class PreparedContextBuilder:
                 builder = PreparedContextBuilder()
                 builder.entry_limit = entries
                 builder._text_entry_limit = entries if entries < self.entry_limit else None
-                builder.focus_state_lookup = self.focus_state_lookup
                 return builder.build_scopes_result(
                     request=history_request.model_copy(update={"include_code": False}),
                     current_scope_id=current_scope_id,
@@ -526,13 +498,6 @@ class PreparedContextBuilder:
             (),
         )
 
-    def _frozen_excerpt_state(self, current_scope_id: str | None):
-        """Resolve the runtime's per-scope focus-freeze state, if one is wired in."""
-
-        if self.focus_state_lookup is None or current_scope_id is None:
-            return None
-        return self.focus_state_lookup(current_scope_id)
-
     def _excerpt_for_round(
         self,
         request: PrepareContextRequest,
@@ -543,55 +508,30 @@ class PreparedContextBuilder:
     ) -> str | None:
         """Render the trailing excerpt for this round.
 
-        The excerpt has two jobs, and they pull in opposite directions. A body that
-        varies with the query is what makes consecutive Contexts distinguishable, but a
-        body whose tail is rewritten on every round pays a delta on every round. The
-        freeze used to solve the second job by reusing the previous bytes, which also
-        froze the first: at a tight budget the item array stops growing long before the
-        sequence ends, so a query-shaped tail was the only thing that ever changed - and
-        freezing it collapsed forty rounds into one Context.
+        The excerpt is ``"<terms>: <focus>"``: the request's own terms name what was
+        asked, and the rest quotes the content of the entry the query actually landed
+        on - the round's focus, which is the newest matching hit once the sequence
+        starts appending. Quoting real, cited content keeps the tail attributable, and
+        following the focus keeps an append visible in the tail even at a budget whose
+        item array stopped growing rounds ago.
 
-        The excerpt therefore *always* re-renders, but it is rendered from a window that
-        already tracks the round: the query terms say what was asked, and the excerpt
-        prefers an entry the body could not fit, so an append that no longer fits still
-        reaches the tail. Nothing here reads cross-round state, which keeps ``prepare``
-        idempotent - the incremental wrapper refuses to rebuild a body the plain call
-        would not have produced.
+        It is a pure function of the request and this round's focus: nothing here reads
+        cross-round state, which keeps ``prepare`` idempotent - the incremental wrapper
+        refuses to rebuild a body the plain call would not have produced.
         """
 
-        del current_scope_id  # the freeze state is no longer consulted for rendering
+        del current_scope_id, memory_entries  # the excerpt follows the focus, not the fitted array
         cap = min(_FOCUS_MAX_BYTES, max(0, room - _FOCUS_FRAME_BYTES))
         if cap <= 0:
             return None
-        excerpt = _focus_excerpt(request.query, memory_entries, hint, cap=cap)
-        # At a budget whose item array is already full, nothing the sequence appends can
-        # reach the body: the array is fitted in first-seen order, so the new turn is
-        # exactly what falls off the end. The tail is then the only part of the body that
-        # still moves, so both things the tail has to say go there, in this order:
-        #
-        # * the request's own terms, because the delivered body has to answer "which
-        #   request was this prepared for" - a query switch with unchanged memory is
-        #   exactly the round where nothing else in the body can carry that;
-        # * a marker over the window, because once the array is full an append reaches
-        #   nothing else, and forty rounds of one Context is not four distinct Contexts.
-        #
-        # The terms go first and are fitted whole: a term cut in half ("ote" for "remote")
-        # neither names the request nor costs less than dropping it.
-        #
-        # The marker is keyed on content, not on identity or arrival order. The window's
-        # entry ids carry a per-run UUID, and recall settled in a different order between
-        # the plain call and the rebuild's internal call - a marker over "the newest hit"
-        # then changed the tail between the two, which is a verify=FAIL on every round.
-        # Hashing the sorted contents makes both calls agree on the tail bytes, and the
-        # tail is exactly what the receiver rebuilds and diffs against.
-        marker = _round_marker(memory_entries)
-        if marker is not None:
-            budget = cap - len(marker.encode("utf-8")) - 1
-            terms = _fit_terms(_query_terms(request.query), budget) if budget > 0 else None
-            if terms:
-                return f"{terms} {marker}"
-            return _truncate_utf8(marker, cap) or excerpt
-        return excerpt
+        label = _fit_terms(_query_terms(request.query), cap)
+        text = " ".join(hint.split()) if hint else ""
+        if not label:
+            return _truncate_utf8(text, cap) or None
+        body_room = cap - len(label.encode("utf-8")) - 2
+        if body_room <= 0 or not text:
+            return label
+        return f"{label}: {_truncate_utf8(text, body_room)}"
 
     def _select_text(
         self,
@@ -1143,109 +1083,12 @@ def _render(
     policy = COMPACT_TRUST_POLICY if compact else TRUST_POLICY
     return "\n\n".join((policy, f"{_BEGIN_MARKER}\n{encoded}\n{_END_MARKER}"))
 
+def _focus_reserve(focus: str | None) -> int:
+    """Exact bytes the trailing excerpt adds to the rendered body."""
 
-def _focus_excerpt(
-    query: str,
-    entries: Sequence[_PreparedContextEntry],
-    fallback: str | None,
-    *,
-    cap: int,
-) -> str | None:
-    """Return the span of the delivered window that this request actually landed on.
-
-    The window is searched as a whole rather than only its best-ranked row: the request's own
-    recall can rank a vector neighbour first, and an excerpt that cannot quote the request
-    would describe the wrong turn. ``fallback`` is the raw text of that top hit, used when the
-    query appears nowhere in the window - the request then reached the window by meaning, and
-    pointing at the head of its own best hit is still better than pointing nowhere.
-
-    The terms lead and the snippet follows only if the budget still has room: the terms are
-    what makes two requests produce two different bodies, and they are a few bytes each, while
-    the snippet is the expensive part. A caller on a tight budget therefore still gets a body
-    that names this request, without paying for a second copy of an item.
-
-    Falling back to the bare terms when the window contains none of them is what keeps the
-    body request-shaped for every request. A measurement sequence draws its retrieval terms
-    from the same meeting the window is built from, so most terms do appear - but the ones
-    that do not are precisely the ones that would otherwise return ``None``, drop the excerpt,
-    and make this round's body byte-identical to the previous round's. Returning the term is
-    also honest: it names what was asked even when the window has nothing to quote for it.
-    """
-
-    if cap <= 0:
-        return None
-    terms = _query_terms(query)
-    if terms:
-        best_text = _best_matching_text(terms, entries)
-        matched = tuple(term for term in terms if best_text is not None and term in best_text.casefold())
-        if matched:
-            labelled = _labelled_excerpt(best_text or "", matched, cap)
-            if labelled:
-                return labelled
-    # When the window contains none of this request's terms, name the request itself. The
-    # fallback sits behind the terms rather than in front of them: it is the text of the
-    # round's best hit, which is the *same* text for every request, so placing it first makes
-    # two different requests produce one byte-identical body - the failure this whole function
-    # exists to prevent. The terms are per-request by construction, cost a few bytes, and say
-    # what was actually asked.
-    if terms:
-        label = _fit_terms(terms, cap)
-        if label:
-            return label
-    if fallback:
-        return _truncate_utf8(fallback, cap) or None
-    return None
-
-
-def _round_marker(entries: Sequence[_PreparedContextEntry]) -> str | None:
-    """A short, stable label for the window this round rendered.
-
-    The item array is fitted to the budget in first-seen order, so at a tight budget the
-    tail of the recall never renders at all. The sequence appends one turn per round, so a
-    label over the rendered window is the only part of the body that can still move once
-    the array has stopped growing - it is what keeps forty rounds from rendering one
-    Context, and what lets "at least four distinct Contexts" hold at any budget.
-
-    The label is keyed on *content*, not on identity or arrival order: the entry ids carry
-    a per-run UUID, and recall is asynchronous enough that the same turns can surface in a
-    different order on a second call. Either would make the plain call and the rebuild's
-    internal call disagree on the tail bytes. Hashing the sorted set of contents makes two
-    windows over the same material produce the same label no matter how the call is made.
-    """
-
-    if not entries:
-        return None
-    joined = "\n".join(sorted(" ".join(entry.content.split()) for entry in entries))
-    digest = hashlib.sha256(joined.encode("utf-8")).hexdigest()[:_ROUND_MARKER_DIGITS]
-    return f"{_ROUND_MARKER_PREFIX}{digest}"
-
-
-def _best_matching_text(terms: Sequence[str], entries: Sequence[_PreparedContextEntry]) -> str | None:
-    """The delivered entry that contains the most of this request's terms."""
-
-    best_text: str | None = None
-    best_score = 0
-    for entry in entries:
-        lowered = entry.content.casefold()
-        score = sum(1 for term in terms if term in lowered)
-        if score > best_score:
-            best_text, best_score = entry.content, score
-    return best_text
-
-
-def _labelled_excerpt(text: str, matched: Sequence[str], cap: int) -> str | None:
-    """``"<terms>: <span>"``, degrading to the bare terms when the span does not fit."""
-
-    label = _fit_terms(matched, cap)
-    if not label:
-        return None
-    room = cap - len(label.encode("utf-8"))
-    if room > 2:
-        span = _matching_span(text, matched, room - 2)
-        snippet = span.split(": ", 1)[-1] if span else ""
-        if snippet:
-            return f"{label}: {snippet}"
-    return label
+    if not focus:
+        return 0
+    return len(b',"focus":') + len(json.dumps(focus, ensure_ascii=False).encode("utf-8"))
 
 
 def _fit_terms(terms: Sequence[str], cap: int) -> str | None:
@@ -1260,56 +1103,6 @@ def _fit_terms(terms: Sequence[str], cap: int) -> str | None:
         chosen.append(term)
         used += addition
     return "+".join(chosen) if chosen else None
-
-
-def _focus_reserve(focus: str | None) -> int:
-    """Exact bytes the trailing excerpt adds to the rendered body."""
-
-    if not focus:
-        return 0
-    return len(b',"focus":') + len(json.dumps(focus, ensure_ascii=False).encode("utf-8"))
-
-
-def _matching_span(text: str, terms: Sequence[str], max_bytes: int) -> str | None:
-    """Return ``"<matched terms>: <window>"`` for the part of ``text`` the query landed on.
-
-    The matched terms are part of the excerpt because they are the reason this span is the
-    focus: two different requests over the same memory often land on the same first bytes of
-    the same entry, and the delivered body still has to say which request it was prepared for.
-    Deterministic and query-driven; the earliest window wins ties, so identical requests over
-    identical memory always produce identical bytes.
-    """
-
-    if not terms:
-        return None
-    lowered = text.casefold()
-    positions = [(lowered.find(term), term) for term in terms]
-    positions = [(position, term) for position, term in positions if position >= 0]
-    if not positions:
-        return None
-    best_start = -1
-    best_score = 0
-    for position, _term in positions:
-        start = max(0, position - max_bytes // 3)
-        window = lowered[start : start + max_bytes]
-        score = sum(1 for term in terms if term in window)
-        if score > best_score or (score == best_score and (best_start < 0 or start < best_start)):
-            best_start, best_score = start, score
-    if best_start < 0:
-        return None
-    matched = [term for term in terms if term in lowered[best_start : best_start + max_bytes]]
-    label = "+".join(matched[:2])
-    # The label and the span share one budget: the caller reserved ``max_bytes`` plus a small
-    # frame for the JSON around it, and overrunning that frame would drop the excerpt entirely.
-    snippet_budget = max(0, max_bytes - (len(label.encode("utf-8")) + 2 if label else 0))
-    snippet = (
-        _truncate_utf8(text[best_start:], snippet_budget)
-        if best_start
-        else _truncate_utf8(text, snippet_budget)
-    )
-    if not snippet:
-        return None
-    return f"{label}: {snippet}" if label else snippet
 
 
 def _query_terms(query: str) -> tuple[str, ...]:
