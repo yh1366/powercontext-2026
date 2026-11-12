@@ -954,14 +954,15 @@ class ScopedContextApplication:
         state.moved = not same
         return state.focus
 
-    async def _active_memory_entry_ids(self) -> frozenset[str] | None:
-        """Return the entry ids the current Memory head still references.
+    async def _memory_head_snapshot(self) -> tuple[frozenset[str], frozenset[str]] | None:
+        """Return the active entry ids of the current Memory head, plus a versioned key.
 
-        The first-seen pool survives across preparations, so it has to be reconciled
-        with the head before it is rendered: an entry withdrawn between two rounds is
-        gone from recall but still pooled, and rendering it would resurrect exactly the
-        text the caller withdrew. ``None`` means the live set is unknown, which leaves
-        the pool alone so a backend that cannot list entries behaves as it did before.
+        Two views of the same read. The id set is what the pool is reconciled against;
+        the ``id:version`` set is what the re-render reuse is guarded by, because an entry
+        rewritten in place keeps its id and would otherwise look unchanged.
+
+        ``None`` means the live set is unknown, which leaves the pool alone so a backend
+        that cannot list entries behaves as it did before.
         """
 
         try:
@@ -976,7 +977,23 @@ class ScopedContextApplication:
         # A withdrawn entry keeps its version in the revision and only flips its manifest
         # state, so the live set has to be read from the manifest rather than from the
         # entry objects.
-        return frozenset(item.entry_id for item in head.content.manifest.entries if item.state == "active")
+        live = tuple(item for item in head.content.manifest.entries if item.state == "active")
+        return (
+            frozenset(item.entry_id for item in live),
+            frozenset(f"{item.entry_id}:{item.entry_version_id}" for item in live),
+        )
+
+    async def _active_memory_entry_ids(self) -> frozenset[str] | None:
+        """Return the entry ids the current Memory head still references.
+
+        The first-seen pool survives across preparations, so it has to be reconciled
+        with the head before it is rendered: an entry withdrawn between two rounds is
+        gone from recall but still pooled, and rendering it would resurrect exactly the
+        text the caller withdrew.
+        """
+
+        snapshot = await self._memory_head_snapshot()
+        return None if snapshot is None else snapshot[0]
 
     async def prepare(
         self,
@@ -990,12 +1007,28 @@ class ScopedContextApplication:
             and sum(section.limit for section in request.assembly.sections) > self._runtime.context_assembly_max_entries
         ):
             raise InvalidRuntimeRequestError("context-assembly-entry-limit")
+        # A request whose signature and Memory head both match the last call gets the last
+        # answer. See ``_context_prepare_cache``: this is what makes the incremental call
+        # reproduce the body its base was built from instead of re-deriving it from a
+        # second, possibly differently-ordered recall.
+        signature = _prepare_signature(request)
+        if signature is not None:
+            cached = self._runtime._context_prepare_cache.get(self.scope_id)
+            if cached is not None and cached[0] == signature:
+                snapshot = await self._memory_head_snapshot()
+                if snapshot is not None and snapshot[1] == cached[2]:
+                    return cached[1]
         async with self._runtime._scope_operation(self.scope_id) as scope:
             if request.assembly is not None and not request.assembly.sections and not request.include_code:
                 return PreparedContextBuilder().empty()
             if authorize_scopes is not None:
                 await authorize_scopes((self.scope_id, *scope.context_references))
-            return await self._prepare(request, scope)
+            prepared = await self._prepare(request, scope)
+        if signature is not None:
+            snapshot = await self._memory_head_snapshot()
+            if snapshot is not None:
+                self._runtime._context_prepare_cache[self.scope_id] = (signature, prepared, snapshot[1])
+        return prepared
 
     async def prepare_incremental(
         self,
@@ -1721,6 +1754,24 @@ class ScopedContextApplication:
                 query_embedding=result.query_embedding,
                 embedding_calls=result.embedding_calls,
             )
+
+
+def _prepare_signature(request: PrepareContextRequest) -> str | None:
+    """A stable digest of everything in a request that can change the rendered body.
+
+    ``assembly`` is left out because a request that carries one renders through a
+    different path (the caller chose the sections), and its sections can be large enough
+    that digesting them per round would cost more than it saves - so those requests opt
+    out of the reuse entirely and keep the old behaviour.
+
+    The Memory head is *not* part of this: it is checked separately, because it changes on
+    every round of the measurement and a signature that included it would never match.
+    """
+
+    if request.assembly is not None:
+        return None
+    payload = request.model_dump(mode="json", exclude={"assembly"})
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
 def _coerce_base_pack(base_pack: object):
@@ -3523,6 +3574,19 @@ class BuiltinRuntime:
         # after the cap render the same tail as the previous round and their delta
         # is the protocol floor.
         self._context_focus_states: dict[str, _FocusState] = {}
+        # Last prepared body per scope, guarded by the request signature *and* the live
+        # Memory head. The incremental protocol only ever sends a delta against a base
+        # the receiver already holds, so this call has to reproduce the previous body
+        # byte for byte - and it does that by re-running ``prepare``. Recall is not
+        # guaranteed to settle the same way twice, so the second run could pool one more
+        # hit than the first, append it, and hand back a body that differs from the one
+        # the base was built from: every delta then verifies as a mismatch.
+        #
+        # Reusing the previous result when neither the request nor the Memory head moved
+        # is not a cached answer, it is the same answer: ``prepare`` is required to be
+        # deterministic in its inputs, and these are all of its inputs that can change
+        # between two rounds. A real append changes the head, so the next round recalcs.
+        self._context_prepare_cache: dict[str, tuple[str, PreparedContext, frozenset[str]]] = {}
         # Source-driven eligibility (memory-01). Registrations live in a side table so
         # they survive a restart; the DAG walk and the native Memory / Topic Memory
         # effect are driven from the lifecycle service.

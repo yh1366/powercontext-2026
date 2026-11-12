@@ -64,13 +64,13 @@ _FOCUS_MAX_BYTES = 40
 # Sixteen fits two ordinary terms ("remote student") next to the window marker, which is
 # all a query switch needs to show up in the tail; every byte past that is paid again on
 # each of the thirty-two rounds.
-_FOCUS_TERM_BYTES = 16
+_FOCUS_TERM_BYTES = 8
 # What the item array gives up so the excerpt always has a home: the excerpt ceiling plus the
 # JSON around it, with margin for escaping. Constant, so the items it lets in are the same in
 # every round. The ceiling is ``_FOCUS_MAX_BYTES`` (40) plus the ``new:`` marker (12), and 72
 # covers both with room for the JSON punctuation - at the 768 budget the 48 bytes this leaves
 # on the table are a whole extra Memory entry.
-_FOCUS_RESERVED_BYTES = 72
+_FOCUS_RESERVED_BYTES = 32
 # Budgets below this pay the excerpt out of the same handful of bytes the delta floor
 # leaves over, so the marker shrinks to keep the gate. 512 - the smallest budget
 # ``PrepareContextRequest`` accepts - has ~16 bytes per round to spend on it.
