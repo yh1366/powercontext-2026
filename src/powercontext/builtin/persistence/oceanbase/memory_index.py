@@ -166,6 +166,57 @@ LIMIT :candidate_limit
 _APPROXIMATE_VECTOR_ORDER = "ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE"
 _EXACT_VECTOR_ORDER = "ORDER BY l2_distance(m.embedding, :query_vector)"
 
+# Parenthesised UNION spelling of the same two channels: no derived tables at all.
+# MySQL (and its dialect siblings) accepts a parenthesised query expression inside
+# UNION, and ``ORDER BY``/``LIMIT`` stay inside their own branch's parentheses, so
+# each channel keeps its ordered run without wrapping it in a derived table. This
+# is the fallback shape for a server whose planner cannot carry a fulltext score
+# or a distance function through a derived table but still serves the plain
+# parenthesised form.
+_OCEANBASE_HYBRID_PAREN_SQL = """
+(SELECT 'fts' AS channel,
+    f.memory_artifact_id,
+    f.head_revision,
+    f.entry_id,
+    f.entry_version_id,
+    vf.text,
+    MATCH (f.searchable_text) AGAINST (:analyzed_query) AS score,
+    NULL AS distance
+FROM pc_memory_entry_heads AS f
+JOIN pc_memory_entry_versions AS vf
+  ON vf.scope_id = f.scope_id
+ AND vf.memory_artifact_id = f.memory_artifact_id
+ AND vf.entry_version_id = f.entry_version_id
+WHERE f.scope_id = :scope_id
+  AND f.memory_artifact_id IN :memory_artifact_ids
+  AND MATCH (f.searchable_text) AGAINST (:analyzed_query)
+{TAG_FTS}
+ORDER BY MATCH (f.searchable_text) AGAINST (:analyzed_query) DESC,
+    f.memory_artifact_id,
+    f.entry_id,
+    f.entry_version_id
+LIMIT :candidate_limit)
+UNION ALL
+(SELECT 'vector' AS channel,
+    m.memory_artifact_id,
+    m.head_revision,
+    m.entry_id,
+    m.entry_version_id,
+    vm.text,
+    NULL AS score,
+    l2_distance(m.embedding, :query_vector) AS distance
+FROM pc_memory_vector_entries AS m
+JOIN pc_memory_entry_versions AS vm
+  ON vm.scope_id = m.scope_id
+ AND vm.memory_artifact_id = m.memory_artifact_id
+ AND vm.entry_version_id = m.entry_version_id
+WHERE m.scope_id = :scope_id
+  AND m.memory_artifact_id IN :memory_artifact_ids
+{TAG_VECTOR}
+ORDER BY l2_distance(m.embedding, :query_vector)
+LIMIT :candidate_limit)
+"""
+
 # Fallback statements used only when the combined statement is rejected by the
 # server.  Serving the two channels separately and merging the already-ordered
 # runs in the application keeps hybrid search working on servers whose UNION
@@ -685,6 +736,7 @@ class OceanBaseMemoryHybridIndex:
         )
         self._hybrid_statements: dict[tuple[bool, int], TextClause] = {}
         self._exact_hybrid_statements: dict[tuple[bool, int], TextClause] = {}
+        self._paren_hybrid_statements: dict[tuple[bool, int], TextClause] = {}
         # The FTS-only statement has no :query_vector placeholder, so it must not
         # receive that bind parameter at construction time.
         self._fts_only_sql = text(_OCEANBASE_FTS_CHANNEL_SQL.format(TAG_FTS="")).bindparams(
@@ -857,6 +909,41 @@ class OceanBaseMemoryHybridIndex:
             self._exact_hybrid_statements[(tagged, limit)] = statement
         return statement
 
+    def _paren_hybrid_statement(self, request: MemorySearchRequest) -> TextClause:
+        """Return the combined statement spelled as parenthesised UNION branches.
+
+        Same two channels, same exact vector ordering, but no derived tables: each
+        branch is a parenthesised query expression, which is the oldest and most
+        widely supported UNION spelling in the MySQL family. A server whose planner
+        rejects a fulltext score or a distance function inside a derived table
+        usually still serves this form, and the per-channel row order is recovered
+        from the row data after the fact either way.
+        """
+
+        tagged = request.tag_filter is not None
+        limit = int(request.candidate_limit)
+        statement = self._paren_hybrid_statements.get((tagged, limit))
+        if statement is None:
+            source = _OCEANBASE_HYBRID_PAREN_SQL.format(
+                TAG_FTS=memory_tag_sql("f") if tagged else "",
+                TAG_VECTOR=memory_tag_sql("m") if tagged else "",
+            )
+            inlined = source.replace(":candidate_limit", str(limit))
+            statement = text(inlined).bindparams(
+                bindparam("memory_artifact_ids", expanding=True),
+                bindparam("query_vector", type_=VECTOR(self.profile.dimension)),
+                *(
+                    (
+                        bindparam("tag_keys", expanding=True),
+                        bindparam("tag_hashes", expanding=True),
+                    )
+                    if tagged
+                    else ()
+                ),
+            )
+            self._paren_hybrid_statements[(tagged, limit)] = statement
+        return statement
+
     async def search_hybrid(
         self,
         connection: AsyncConnection,
@@ -888,67 +975,60 @@ class OceanBaseMemoryHybridIndex:
             ),
             **memory_tag_parameters(request.tag_filter),
         }
-        try:
-            rows = (
-                (
-                    await connection.execute(
-                        self._hybrid_statement(request),
-                        params,
-                    )
-                )
-                .mappings()
-                .all()
-            )
-        except CapabilityNotSupportedError:
-            raise
-        except Exception as error:
-            # One statement is the contract, so a rejected combined statement is
-            # retried as the same single statement with the exact vector ordering
-            # before anything is split into two round trips. The approximate scan
-            # is what a derived table cannot always carry (the planner has to merge
-            # the branch back to apply the outer UNION), and the exact ordering the
-            # same index still serves returns the identical top-k for an L2 index.
-            logging.getLogger(__name__).warning(
-                "hybrid search statement rejected; retrying it with the exact vector ordering",
-                exc_info=error,
-            )
+        # One statement is the contract, so every rejected combined shape is
+        # retried with the next single-statement spelling before anything is
+        # split into two round trips. The ladder runs from the shape that keeps
+        # the native approximate scan to the most conservative one: a derived
+        # table cannot always carry the approximate hint once the planner merges
+        # the branch back for the outer UNION, a server may reject the derived
+        # table itself, and the parenthesised UNION spelling is the oldest form
+        # in the MySQL family. The exact orderings return the same top-k for an
+        # L2 index, and the post-execute sort below rebuilds either run's order
+        # from the row data, so every rung on this ladder produces the same
+        # channels.
+        shapes = (
+            self._hybrid_statement(request),
+            self._exact_hybrid_statement(request),
+            self._paren_hybrid_statement(request),
+        )
+        rows = None
+        last_error: Exception | None = None
+        for shape in shapes:
             try:
-                rows = (
-                    (
-                        await connection.execute(
-                            self._exact_hybrid_statement(request),
-                            params,
-                        )
-                    )
-                    .mappings()
-                    .all()
-                )
+                rows = (await connection.execute(shape, params)).mappings().all()
+                break
             except CapabilityNotSupportedError:
                 raise
-            except Exception as exact_error:
-                # Only a server that cannot express both access paths inside one
-                # statement reaches this branch, and the per-channel statements are
-                # the frozen behaviour that keeps recall correct there. The reason
-                # is logged in full: a silent fallback hides the real failure and
-                # turns a candidate-cost failure into an unexplained one.
+            except Exception as error:
+                last_error = error
                 logging.getLogger(__name__).warning(
-                    "exact hybrid statement rejected too; falling back to per-channel statements",
-                    exc_info=exact_error,
+                    "hybrid search statement shape rejected; trying the next single-statement spelling",
+                    exc_info=error,
                 )
-                fts_params = {key: value for key, value in params.items() if key != "query_vector"}
-                fts_rows = (
-                    await connection.execute(
-                        self._fts_only_sql if request.tag_filter is None else self._tagged_fts_only_sql,
-                        fts_params,
-                    )
-                ).mappings().all()
-                vector_rows = (
-                    await connection.execute(
-                        self._vector_only_sql if request.tag_filter is None else self._tagged_vector_only_sql,
-                        params,
-                    )
-                ).mappings().all()
-                rows = [*fts_rows, *vector_rows]
+        if rows is None:
+            # Only a server that cannot express both access paths inside one
+            # statement reaches this branch, and the per-channel statements are
+            # the frozen behaviour that keeps recall correct there. The reason
+            # is logged in full: a silent fallback hides the real failure and
+            # turns a candidate-cost failure into an unexplained one.
+            logging.getLogger(__name__).warning(
+                "every combined hybrid spelling rejected; falling back to per-channel statements",
+                exc_info=last_error,
+            )
+            fts_params = {key: value for key, value in params.items() if key != "query_vector"}
+            fts_rows = (
+                await connection.execute(
+                    self._fts_only_sql if request.tag_filter is None else self._tagged_fts_only_sql,
+                    fts_params,
+                )
+            ).mappings().all()
+            vector_rows = (
+                await connection.execute(
+                    self._vector_only_sql if request.tag_filter is None else self._tagged_vector_only_sql,
+                    params,
+                )
+            ).mappings().all()
+            rows = [*fts_rows, *vector_rows]
         # UNION ALL keeps each branch's own ORDER BY and LIMIT, so the rows arrive as
         # two already-ordered runs; split them back into channels without re-sorting.
         fts_rows = [row for row in rows if str(row["channel"]) == "fts"]
