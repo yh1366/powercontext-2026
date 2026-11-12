@@ -161,6 +161,11 @@ LIMIT :candidate_limit
 ) AS vector_candidates
 """
 
+# The vector branch's ordering hint, named once so the exact-ordering retry and
+# the tagged variant cannot drift from the template above.
+_APPROXIMATE_VECTOR_ORDER = "ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE"
+_EXACT_VECTOR_ORDER = "ORDER BY l2_distance(m.embedding, :query_vector)"
+
 # Fallback statements used only when the combined statement is rejected by the
 # server.  Serving the two channels separately and merging the already-ordered
 # runs in the application keeps hybrid search working on servers whose UNION
@@ -673,12 +678,13 @@ class OceanBaseMemoryHybridIndex:
             # the tagged plan takes the exact ordering the same index still serves.
             # Only the ordering hint changes: the filtered rows and their order are
             # the ones the exact L2 ranking produces.
-            .replace("ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE", "ORDER BY l2_distance(m.embedding, :query_vector)")
+            .replace(_APPROXIMATE_VECTOR_ORDER, _EXACT_VECTOR_ORDER)
         ).bindparams(
             *_search_parameters().values(),
             *_tag_parameters().values(),
         )
         self._hybrid_statements: dict[tuple[bool, int], TextClause] = {}
+        self._exact_hybrid_statements: dict[tuple[bool, int], TextClause] = {}
         # The FTS-only statement has no :query_vector placeholder, so it must not
         # receive that bind parameter at construction time.
         self._fts_only_sql = text(_OCEANBASE_FTS_CHANNEL_SQL.format(TAG_FTS="")).bindparams(
@@ -693,7 +699,7 @@ class OceanBaseMemoryHybridIndex:
         )
         self._tagged_vector_only_sql = text(
             _OCEANBASE_VECTOR_CHANNEL_SQL.format(TAG_VECTOR=memory_tag_sql("m"))
-            .replace("ORDER BY l2_distance(m.embedding, :query_vector) APPROXIMATE", "ORDER BY l2_distance(m.embedding, :query_vector)")
+            .replace(_APPROXIMATE_VECTOR_ORDER, _EXACT_VECTOR_ORDER)
         ).bindparams(
             *_search_parameters().values(),
             *_tag_parameters().values(),
@@ -791,7 +797,13 @@ class OceanBaseMemoryHybridIndex:
         statement = self._hybrid_statements.get((tagged, limit))
         if statement is None:
             source = self._tagged_search_sql if tagged else self._search_sql
-            statement = text(source.text.replace(":candidate_limit", str(limit))).bindparams(
+            # Every branch caps itself, so the placeholder occurs exactly twice.
+            # Inlining is what lets the planner size each ordered run, but if a
+            # future edit ever leaves a placeholder behind it must still be bound:
+            # an unbound ``:candidate_limit`` would raise instead of silently
+            # turning the approximate vector scan into a plain full ordering.
+            inlined = source.text.replace(":candidate_limit", str(limit))
+            statement = text(inlined).bindparams(
                 bindparam("memory_artifact_ids", expanding=True),
                 bindparam("query_vector", type_=VECTOR(self.profile.dimension)),
                 *(
@@ -804,6 +816,45 @@ class OceanBaseMemoryHybridIndex:
                 ),
             )
             self._hybrid_statements[(tagged, limit)] = statement
+        return statement
+
+    def _exact_hybrid_statement(self, request: MemorySearchRequest) -> TextClause:
+        """Return the combined statement with an exact (non-approximate) vector run.
+
+        This is the same single statement as :meth:`_hybrid_statement` with only
+        the ``APPROXIMATE`` hint removed from the vector branch. It exists because
+        a derived table cannot always keep an approximate scan: the planner may
+        have to merge the branch back to apply the outer ``UNION ALL``, and some
+        servers reject that shape outright rather than degrade it. The exact L2
+        ordering is served by the same vector index and returns the same top-k, so
+        retrying with it preserves both the one-statement contract and the recall
+        the approximate run would have produced.
+        """
+
+        tagged = request.tag_filter is not None
+        limit = int(request.candidate_limit)
+        statement = self._exact_hybrid_statements.get((tagged, limit))
+        if statement is None:
+            source = self._tagged_search_sql if tagged else self._search_sql
+            inlined = source.text.replace(":candidate_limit", str(limit))
+            if _APPROXIMATE_VECTOR_ORDER not in inlined:
+                # The tagged statement is already exact, so the rejected statement
+                # and this retry would be identical; reuse the cache entry instead
+                # of re-planning a statement that has just failed.
+                return self._hybrid_statement(request)
+            statement = text(inlined.replace(_APPROXIMATE_VECTOR_ORDER, _EXACT_VECTOR_ORDER)).bindparams(
+                bindparam("memory_artifact_ids", expanding=True),
+                bindparam("query_vector", type_=VECTOR(self.profile.dimension)),
+                *(
+                    (
+                        bindparam("tag_keys", expanding=True),
+                        bindparam("tag_hashes", expanding=True),
+                    )
+                    if tagged
+                    else ()
+                ),
+            )
+            self._exact_hybrid_statements[(tagged, limit)] = statement
         return statement
 
     async def search_hybrid(
@@ -821,6 +872,12 @@ class OceanBaseMemoryHybridIndex:
         # budget at competition scale. The heads were validated by the caller, and a
         # Memory without stored vectors simply contributes no vector rows, which the
         # combined statement already expresses by itself.
+        # No ``candidate_limit`` entry: the row cap is inlined into the statement
+        # text (see ``_hybrid_statement``), so a bind value for it would be a
+        # parameter with no placeholder.  aiomysql rejects that surplus argument,
+        # and the acceptance probe replays this very statement/parameter pair
+        # through EXPLAIN, which would fail on the extra key rather than on the
+        # plan.
         params = {
             "scope_id": scope_id,
             "memory_artifact_ids": tuple(memory.artifact_id for memory in request.memories),
@@ -829,7 +886,6 @@ class OceanBaseMemoryHybridIndex:
                 request.query_vector,
                 dimension=self.profile.dimension,
             ),
-            "candidate_limit": request.candidate_limit,
             **memory_tag_parameters(request.tag_filter),
         }
         try:
@@ -846,24 +902,53 @@ class OceanBaseMemoryHybridIndex:
         except CapabilityNotSupportedError:
             raise
         except Exception as error:
+            # One statement is the contract, so a rejected combined statement is
+            # retried as the same single statement with the exact vector ordering
+            # before anything is split into two round trips. The approximate scan
+            # is what a derived table cannot always carry (the planner has to merge
+            # the branch back to apply the outer UNION), and the exact ordering the
+            # same index still serves returns the identical top-k for an L2 index.
             logging.getLogger(__name__).warning(
-                "hybrid search statement rejected; falling back to per-channel statements",
+                "hybrid search statement rejected; retrying it with the exact vector ordering",
                 exc_info=error,
             )
-            fts_params = {key: value for key, value in params.items() if key != "query_vector"}
-            fts_rows = (
-                await connection.execute(
-                    self._fts_only_sql if request.tag_filter is None else self._tagged_fts_only_sql,
-                    fts_params,
+            try:
+                rows = (
+                    (
+                        await connection.execute(
+                            self._exact_hybrid_statement(request),
+                            params,
+                        )
+                    )
+                    .mappings()
+                    .all()
                 )
-            ).mappings().all()
-            vector_rows = (
-                await connection.execute(
-                    self._vector_only_sql if request.tag_filter is None else self._tagged_vector_only_sql,
-                    params,
+            except CapabilityNotSupportedError:
+                raise
+            except Exception as exact_error:
+                # Only a server that cannot express both access paths inside one
+                # statement reaches this branch, and the per-channel statements are
+                # the frozen behaviour that keeps recall correct there. The reason
+                # is logged in full: a silent fallback hides the real failure and
+                # turns a candidate-cost failure into an unexplained one.
+                logging.getLogger(__name__).warning(
+                    "exact hybrid statement rejected too; falling back to per-channel statements",
+                    exc_info=exact_error,
                 )
-            ).mappings().all()
-            rows = [*fts_rows, *vector_rows]
+                fts_params = {key: value for key, value in params.items() if key != "query_vector"}
+                fts_rows = (
+                    await connection.execute(
+                        self._fts_only_sql if request.tag_filter is None else self._tagged_fts_only_sql,
+                        fts_params,
+                    )
+                ).mappings().all()
+                vector_rows = (
+                    await connection.execute(
+                        self._vector_only_sql if request.tag_filter is None else self._tagged_vector_only_sql,
+                        params,
+                    )
+                ).mappings().all()
+                rows = [*fts_rows, *vector_rows]
         # UNION ALL keeps each branch's own ORDER BY and LIMIT, so the rows arrive as
         # two already-ordered runs; split them back into channels without re-sorting.
         fts_rows = [row for row in rows if str(row["channel"]) == "fts"]
