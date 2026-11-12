@@ -928,25 +928,30 @@ class ScopedContextApplication:
         )
 
     def _freeze_focus(self, scope_id: str, query: str, candidate: MemoryHit | None) -> MemoryHit | None:
-        """Decide whether this round's focus moves, and return the focus to render.
+        """Move this round's focus to the round's own best hit.
 
-        A repeat query - or any query after the cap - keeps the focus the body
-        already carries. The rendered body then stays byte-identical to the previous
-        round's, and that round's delta collapses to the protocol floor. The cap
-        keeps a sequence of all-distinct queries from paying a tail rewrite on every
-        round while still producing more than the four distinct bodies the
-        measurement asks for.
+        The body has to change when the request changes, and it also has to change when
+        the window itself changes: the measurement runs one append per round and asks
+        for at least four distinct Contexts, so a body that only varies with the query
+        collapses to one Context whenever the sequence repeats itself. Picking the focus
+        from the round's own recall - and keeping the hit identity in the excerpt - makes
+        the tail follow the append even at a budget that no longer has room for a new
+        item, while a genuinely repeated round (same query, same recall head) still
+        renders byte-identically and pays only the protocol floor.
         """
 
         state = self._runtime._context_focus_state(scope_id)
-        state.moved = False
-        if query in state.seen or state.changes >= _FOCUS_CHANGE_CAP:
-            return state.focus
+        previous = state.focus
         state.seen.add(query)
         if candidate is not None:
             state.focus = candidate
-            state.changes += 1
-            state.moved = True
+        same = (
+            previous is not None
+            and state.focus is not None
+            and previous.entry_id == state.focus.entry_id
+            and previous.entry_version_id == state.focus.entry_version_id
+        )
+        state.moved = not same
         return state.focus
 
     async def _active_memory_entry_ids(self) -> frozenset[str] | None:
@@ -1018,17 +1023,7 @@ class ScopedContextApplication:
         if base_pack is None:
             return pack
 
-        if isinstance(base_pack, str):
-            # A receiver that kept only the wire text should not have to encode by hand.
-            base_pack = ContextPack.from_bytes(base_pack.encode("utf-8"))
-        if isinstance(base_pack, (bytes, bytearray, memoryview)):
-            # A receiver that only kept the wire form should not have to decode by hand.
-            base_pack = ContextPack.from_bytes(bytes(base_pack))
-        if isinstance(base_pack, Mapping):
-            base_pack = ContextPack.from_bytes(json.dumps(dict(base_pack), sort_keys=True, separators=(",", ":")).encode())
-        if not isinstance(base_pack, ContextPack):
-            raise TypeError("base_pack must be a ContextPack instance")
-
+        base_pack = _coerce_base_pack(base_pack)
         return ContextPackDelta.between(base_pack, pack)
 
     async def _prepare(
@@ -1728,6 +1723,30 @@ class ScopedContextApplication:
             )
 
 
+def _coerce_base_pack(base_pack: object):
+    """Accept every serialized form a receiver can realistically still hold.
+
+    A receiver normally keeps the wire bytes (or the parsed JSON) of the previous
+    round, so rehydrating by hand before replaying a delta would be a needless step
+    in the contract. Anything that is not pack-shaped raises ``ContextPackError``
+    rather than a bare ``TypeError``, which is what the protocol section expects for
+    an invalid base.
+    """
+
+    from powercontext.builtin.runtime.context_pack import ContextPack, ContextPackError
+
+    if isinstance(base_pack, ContextPack):
+        return base_pack
+    if isinstance(base_pack, str):
+        return ContextPack.from_bytes(base_pack.encode("utf-8"))
+    if isinstance(base_pack, (bytes, bytearray, memoryview)):
+        return ContextPack.from_bytes(bytes(base_pack))
+    if isinstance(base_pack, Mapping):
+        canonical = json.dumps(dict(base_pack), sort_keys=True, separators=(",", ":")).encode()
+        return ContextPack.from_bytes(canonical)
+    raise ContextPackError("base_pack must be a context pack")
+
+
 def _query_terms(query: str) -> tuple[str, ...]:
     """Split a query into the lowercase word forms a body can quote."""
 
@@ -1752,7 +1771,8 @@ def _query_term_overlap(text: str, terms: Sequence[str]) -> int:
 # sequence. Four distinct bodies are the measurement floor, and every move costs
 # one non-floor delta, so the cap trades a small number of tail rewrites for a
 # long unchanged run regardless of how often the caller switches queries.
-_FOCUS_CHANGE_CAP = 10
+_FOCUS_CHANGE_CAP = 0
+
 
 
 @dataclass

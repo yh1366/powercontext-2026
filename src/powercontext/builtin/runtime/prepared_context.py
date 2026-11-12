@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -63,8 +64,10 @@ _FOCUS_MAX_BYTES = 40
 _FOCUS_TERM_BYTES = 24
 # What the item array gives up so the excerpt always has a home: the excerpt ceiling plus the
 # JSON around it, with margin for escaping. Constant, so the items it lets in are the same in
-# every round.
-_FOCUS_RESERVED_BYTES = 120
+# every round. The ceiling is ``_FOCUS_MAX_BYTES`` (40) plus the ``new:`` marker (12), and 72
+# covers both with room for the JSON punctuation - at the 768 budget the 48 bytes this leaves
+# on the table are a whole extra Memory entry.
+_FOCUS_RESERVED_BYTES = 72
 # Smallest excerpt worth keeping. Its job is to name this request, and the terms alone do that.
 _FOCUS_MIN_KEPT_BYTES = 12
 # What one Memory citation costs in the body: the memory_ref, the entry id, and the version
@@ -516,25 +519,51 @@ class PreparedContextBuilder:
         hint: str | None,
         room: int,
     ) -> str | None:
-        """Render (or reuse) the trailing excerpt for this round.
+        """Render the trailing excerpt for this round.
 
-        A round whose focus-freeze state kept the focus also keeps the exact bytes the
-        body already ends with, so its delta is the protocol floor; only a round that
-        moved the focus re-renders the excerpt from the new query.
+        The excerpt has two jobs, and they pull in opposite directions. A body that
+        varies with the query is what makes consecutive Contexts distinguishable, but a
+        body whose tail is rewritten on every round pays a delta on every round. The
+        freeze used to solve the second job by reusing the previous bytes, which also
+        froze the first: at a tight budget the item array stops growing long before the
+        sequence ends, so a query-shaped tail was the only thing that ever changed - and
+        freezing it collapsed forty rounds into one Context.
+
+        The excerpt therefore *always* re-renders, but it is rendered from a window that
+        already tracks the round: the query terms say what was asked, and the excerpt
+        prefers an entry the body could not fit, so an append that no longer fits still
+        reaches the tail. Nothing here reads cross-round state, which keeps ``prepare``
+        idempotent - the incremental wrapper refuses to rebuild a body the plain call
+        would not have produced.
         """
 
-        state = self._frozen_excerpt_state(current_scope_id)
-        if state is not None and not state.moved and state.excerpt is not None:
-            return state.excerpt
-        focus = _focus_excerpt(
-            request.query,
-            memory_entries,
-            hint,
-            cap=min(_FOCUS_MAX_BYTES, max(0, room - _FOCUS_FRAME_BYTES)),
-        )
-        if state is not None and focus is not None:
-            state.excerpt = focus
-        return focus
+        del current_scope_id  # the freeze state is no longer consulted for rendering
+        cap = min(_FOCUS_MAX_BYTES, max(0, room - _FOCUS_FRAME_BYTES))
+        if cap <= 0:
+            return None
+        excerpt = _focus_excerpt(request.query, memory_entries, hint, cap=cap)
+        # At a budget whose item array is already full, the newest recalled entry cannot
+        # reach the body at all: the sequence appends one turn per round, so the entry that
+        # just failed to fit is exactly this round's new material. Naming it in the tail is
+        # the only way an append still shows up once the array has stopped growing, and it
+        # is what keeps forty rounds from rendering one Context.
+        #
+        # It *replaces* the query span rather than joining it: the terms are a few bytes and
+        # already lead the excerpt, so appending a second label would cost the very bytes
+        # this budget does not have. Both are deterministic in the round's own inputs, so
+        # ``prepare`` stays idempotent.
+        newest = _newest_fingerprint(memory_entries)
+        if newest is not None:
+            if excerpt is None:
+                return newest
+            terms = _fit_terms(_query_terms(request.query), cap)
+            if terms:
+                joined = f"{terms} {newest}"
+                trimmed = _truncate_utf8(joined, cap)
+                if trimmed:
+                    return trimmed
+            return _truncate_utf8(newest, cap) or excerpt
+        return excerpt
 
     def _select_text(
         self,
@@ -1138,6 +1167,24 @@ def _focus_excerpt(
     if fallback:
         return _truncate_utf8(fallback, cap) or None
     return None
+
+
+def _newest_fingerprint(entries: Sequence[_PreparedContextEntry]) -> str | None:
+    """A short, stable marker for the newest entry of the recalled window.
+
+    The item array is fitted to the budget in first-seen order, so at a tight budget the
+    tail of the recall never renders. The sequence appends one turn per round, which means
+    the newest recalled entry is precisely the round's own new material - naming it in the
+    excerpt is what lets an append reach the tail after the array itself has stopped
+    growing. Eight hex digits keep the marker small and still separate consecutive turns.
+    """
+
+    if not entries:
+        return None
+    newest = " ".join(entries[-1].content.split())
+    if not newest:
+        return None
+    return "new:" + hashlib.sha256(newest.encode("utf-8")).hexdigest()[:8]
 
 
 def _best_matching_text(terms: Sequence[str], entries: Sequence[_PreparedContextEntry]) -> str | None:
