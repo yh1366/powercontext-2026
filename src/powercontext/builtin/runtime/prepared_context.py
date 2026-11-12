@@ -61,7 +61,10 @@ _FOCUS_MAX_BYTES = 40
 # The part of the excerpt that is always kept: the terms of this request that the window
 # actually contains. They are the minimum that makes two requests produce two different
 # bodies, they are a handful of bytes each, and they never collide with the item array.
-_FOCUS_TERM_BYTES = 24
+# Sixteen fits two ordinary terms ("remote student") next to the window marker, which is
+# all a query switch needs to show up in the tail; every byte past that is paid again on
+# each of the thirty-two rounds.
+_FOCUS_TERM_BYTES = 16
 # What the item array gives up so the excerpt always has a home: the excerpt ceiling plus the
 # JSON around it, with margin for escaping. Constant, so the items it lets in are the same in
 # every round. The ceiling is ``_FOCUS_MAX_BYTES`` (40) plus the ``new:`` marker (12), and 72
@@ -72,10 +75,11 @@ _FOCUS_RESERVED_BYTES = 72
 # leaves over, so the marker shrinks to keep the gate. 512 - the smallest budget
 # ``PrepareContextRequest`` accepts - has ~16 bytes per round to spend on it.
 _NARROW_BUDGET_BYTES = 700
-# Hex digits in the round marker: four keeps it inside the ~16 bytes per round a 512-byte
-# budget leaves after the delta floor, and forty rounds collide at four digits far less
-# often than the four distinct Contexts the measurement needs.
-_ROUND_MARKER_DIGITS = 4
+# Hex digits in the round marker. Six, not four: the measurement takes 32 increments and a
+# four-digit window collides about once in 128 sequences, and a collision merges two rounds
+# into one Context - the one failure this marker exists to prevent. Two extra bytes are
+# 0.9% of the body at a 768-byte budget.
+_ROUND_MARKER_DIGITS = 6
 # Prefix that marks the digest as this round's window label rather than memory content. One
 # byte, because at a 512-byte budget that byte is 0.4% of the saving.
 _ROUND_MARKER_PREFIX = "#"
@@ -563,12 +567,16 @@ class PreparedContextBuilder:
         # At a budget whose item array is already full, nothing the sequence appends can
         # reach the body: the array is fitted in first-seen order, so the new turn is
         # exactly what falls off the end. The tail is then the only part of the body that
-        # still moves, and naming *the window* there is what keeps forty rounds from
-        # rendering one Context.
+        # still moves, so both things the tail has to say go there, in this order:
         #
-        # It replaces the query span rather than joining it: the terms are a few bytes and
-        # would be the first thing to overflow this budget, while the marker is the
-        # stronger signal of the two.
+        # * the request's own terms, because the delivered body has to answer "which
+        #   request was this prepared for" - a query switch with unchanged memory is
+        #   exactly the round where nothing else in the body can carry that;
+        # * a marker over the window, because once the array is full an append reaches
+        #   nothing else, and forty rounds of one Context is not four distinct Contexts.
+        #
+        # The terms go first and are fitted whole: a term cut in half ("ote" for "remote")
+        # neither names the request nor costs less than dropping it.
         #
         # The marker is keyed on content, not on identity or arrival order. The window's
         # entry ids carry a per-run UUID, and recall settled in a different order between
@@ -578,6 +586,10 @@ class PreparedContextBuilder:
         # tail is exactly what the receiver rebuilds and diffs against.
         marker = _round_marker(memory_entries)
         if marker is not None:
+            budget = cap - len(marker.encode("utf-8")) - 1
+            terms = _fit_terms(_query_terms(request.query), budget) if budget > 0 else None
+            if terms:
+                return f"{terms} {marker}"
             return _truncate_utf8(marker, cap) or excerpt
         return excerpt
 
