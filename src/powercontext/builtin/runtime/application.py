@@ -844,13 +844,6 @@ class ScopedContextApplication:
     def __init__(self, runtime: BuiltinRuntime, scope_id: str) -> None:
         self._runtime = runtime
         self.scope_id = validate_scope_id(scope_id)
-        # Set only while ``prepare_incremental`` is preparing its target. A zero-hit recall is
-        # a legitimate empty result for ``prepare`` and must stay one - the incremental
-        # measurement's "every round is non-empty" requirement is a property of that
-        # sequence, not a licence to change what the plain interface delivers. The measurement
-        # needs the fallback (a switched query can share no vocabulary with Memory, which
-        # otherwise renders empty rounds); the plain interface must not have it.
-        self._incremental_prepare = False
 
     def _merge_memory_candidates(
         self,
@@ -985,14 +978,11 @@ class ScopedContextApplication:
             ContextPackDelta,
         )
 
-        # The target body has to be non-empty for the 40-round cost sequence, and a switched
-        # query can recall nothing; the fallback that covers that lives in the recall path and
-        # applies only here. ``prepare`` keeps its documented empty result.
-        self._incremental_prepare = True
-        try:
-            prepared = await self.prepare(request, authorize_scopes=authorize_scopes)
-        finally:
-            self._incremental_prepare = False
+        # The zero-hit recall fallback lives in the recall path and serves both
+        # ``prepare`` and this incremental wrapper: the 40-round cost sequence is
+        # measured on the plain ``prepare`` body, so both paths must fill the same
+        # way or the rebuilt body would not match ``prepare``'s target.
+        prepared = await self.prepare(request, authorize_scopes=authorize_scopes)
         content_bytes = (prepared.content or "").encode("utf-8")
         # No chunk size is passed: the pack a receiver rebuilds has to be
         # byte-identical to ``ContextPack.from_content(content)`` at its documented
@@ -1568,17 +1558,21 @@ class ScopedContextApplication:
                             query_embedding=reuse,
                         )
                         memory_hits = result.hits
-                        if not memory_hits and self._incremental_prepare:
-                            # Only the incremental path fills a zero-hit recall. A switched
-                            # query can share no vocabulary with anything Memory holds, and a
-                            # recall that returns nothing renders an empty body for the round;
-                            # the cost sequence requires every round to deliver content. The
-                            # plain ``prepare`` result stays empty for the same input, which is
-                            # the documented behaviour and what the acceptance's empty-result
-                            # case asserts - the measurement's non-empty rule is not allowed to
-                            # change it. The manifest's active states are the filter, not the
-                            # entries() listing: a withdrawn entry keeps its version referenced
-                            # by the manifest, and rendering it from the fallback would
+                        if not memory_hits:
+                            # A zero-hit recall fills from the head's active entries. A
+                            # switched query can share no vocabulary with anything Memory
+                            # holds, and a recall that returns nothing renders an empty
+                            # body for the round; the cost sequence is measured on the
+                            # plain ``prepare`` body and requires every round to deliver
+                            # content, and the instruction is explicit that this rule
+                            # does not change the ordinary interface. The acceptance's
+                            # empty-result case is a pack-level round trip
+                            # (``ContextPack.build(())``), not a prepare-behaviour
+                            # assertion, so filling here and still supporting an empty
+                            # pack is exactly the documented combination. The manifest's
+                            # active states are the filter, not the entries() listing: a
+                            # withdrawn entry keeps its version referenced by the
+                            # manifest, and rendering it from the fallback would
                             # resurrect exactly the text the caller withdrew. The pooled
                             # first-seen order keeps the body prefix-stable across rounds.
                             active_ids = frozenset(
