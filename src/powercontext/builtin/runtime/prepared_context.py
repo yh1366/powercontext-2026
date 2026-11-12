@@ -17,10 +17,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from itertools import chain
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from powercontext.artifacts import ArtifactAddress, ArtifactRef
 from powercontext.builtin.artifacts.experience import Experience, ExperienceSearchHit, render_experience
@@ -197,6 +197,11 @@ class PreparedContextBuilder:
     experience_entry_limit = 2
     max_entry_content_bytes = 2000
     _text_entry_limit: int | None = None
+    # Optional hook letting the embedding runtime hand the renderer its per-scope
+    # focus-freeze state (first sighting of a query, up to a cap). The builder itself
+    # stays pure: without a lookup it simply re-renders the excerpt every round, which
+    # is the historical behavior.
+    focus_state_lookup: Callable[[str], Any] | None = None
 
     def empty(self) -> PreparedContext:
         return PreparedContext(status="empty", content=None, content_bytes=0)
@@ -257,6 +262,7 @@ class PreparedContextBuilder:
                 builder = PreparedContextBuilder()
                 builder.entry_limit = entries
                 builder._text_entry_limit = entries if entries < self.entry_limit else None
+                builder.focus_state_lookup = self.focus_state_lookup
                 return builder.build_scopes_result(
                     request=history_request.model_copy(update={"include_code": False}),
                     current_scope_id=current_scope_id,
@@ -434,12 +440,13 @@ class PreparedContextBuilder:
             ),
             None,
         )
-        focus = _focus_excerpt(
-            request.query,
-            memory_entries,
-            hint,
-            cap=min(_FOCUS_MAX_BYTES, max(0, room - _FOCUS_FRAME_BYTES)),
-        )
+        # The excerpt is derived from the query, so recomputing it every round would
+        # rewrite the tail on every query switch and pay a delta each time. The
+        # focus-freeze decision (first sighting of a query, up to a cap) lives in the
+        # merge step; the excerpt follows it: a round that kept the focus also keeps
+        # the exact bytes the body already ends with, so its delta is the protocol
+        # floor, and only a round that moved the focus re-renders the excerpt.
+        focus = self._excerpt_for_round(request, current_scope_id, memory_entries, hint, room)
         reserve = _focus_reserve(focus)
         if reserve + _MIN_TRUNCATED_CONTENT_BYTES > room:
             # Not enough space for the excerpt *and* something worth citing: the item array
@@ -493,6 +500,41 @@ class PreparedContextBuilder:
             omissions,
             (),
         )
+
+    def _frozen_excerpt_state(self, current_scope_id: str | None):
+        """Resolve the runtime's per-scope focus-freeze state, if one is wired in."""
+
+        if self.focus_state_lookup is None or current_scope_id is None:
+            return None
+        return self.focus_state_lookup(current_scope_id)
+
+    def _excerpt_for_round(
+        self,
+        request: PrepareContextRequest,
+        current_scope_id: str | None,
+        memory_entries: tuple,
+        hint: str | None,
+        room: int,
+    ) -> str | None:
+        """Render (or reuse) the trailing excerpt for this round.
+
+        A round whose focus-freeze state kept the focus also keeps the exact bytes the
+        body already ends with, so its delta is the protocol floor; only a round that
+        moved the focus re-renders the excerpt from the new query.
+        """
+
+        state = self._frozen_excerpt_state(current_scope_id)
+        if state is not None and not state.moved and state.excerpt is not None:
+            return state.excerpt
+        focus = _focus_excerpt(
+            request.query,
+            memory_entries,
+            hint,
+            cap=min(_FOCUS_MAX_BYTES, max(0, room - _FOCUS_FRAME_BYTES)),
+        )
+        if state is not None and focus is not None:
+            state.excerpt = focus
+        return focus
 
     def _select_text(
         self,

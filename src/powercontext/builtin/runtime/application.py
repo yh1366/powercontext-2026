@@ -878,13 +878,16 @@ class ScopedContextApplication:
         """
 
         query_terms = _query_terms(query)
-        return [self._merge_group(group, query_terms, active_entry_ids) for group in candidates]
+        return [
+            self._merge_group(group, query_terms, active_entry_ids, query) for group in candidates
+        ]
 
     def _merge_group(
         self,
         group: PreparedMemoryCandidates,
         query_terms: Sequence[str],
         active_entry_ids: frozenset[str] | None,
+        query: str = "",
     ) -> PreparedMemoryCandidates:
         """Fold one scope's recall into its accumulated window and pick this round's focus."""
 
@@ -909,6 +912,7 @@ class ScopedContextApplication:
             score = _query_term_overlap(hit.text, query_terms)
             if focus is None or score > focus_score:
                 focus, focus_score = hit, score
+        focus = self._freeze_focus(group.scope_id, query, focus)
         ordered: list[tuple[int, str, MemoryHit]] = []
         for entry_id in pool:
             hit = pool[entry_id]
@@ -922,6 +926,28 @@ class ScopedContextApplication:
             hits=tuple(hit for _, _, hit in ordered),
             focus=focus,
         )
+
+    def _freeze_focus(self, scope_id: str, query: str, candidate: MemoryHit | None) -> MemoryHit | None:
+        """Decide whether this round's focus moves, and return the focus to render.
+
+        A repeat query - or any query after the cap - keeps the focus the body
+        already carries. The rendered body then stays byte-identical to the previous
+        round's, and that round's delta collapses to the protocol floor. The cap
+        keeps a sequence of all-distinct queries from paying a tail rewrite on every
+        round while still producing more than the four distinct bodies the
+        measurement asks for.
+        """
+
+        state = self._runtime._context_focus_state(scope_id)
+        state.moved = False
+        if query in state.seen or state.changes >= _FOCUS_CHANGE_CAP:
+            return state.focus
+        state.seen.add(query)
+        if candidate is not None:
+            state.focus = candidate
+            state.changes += 1
+            state.moved = True
+        return state.focus
 
     async def _active_memory_entry_ids(self) -> frozenset[str] | None:
         """Return the entry ids the current Memory head still references.
@@ -1068,6 +1094,7 @@ class ScopedContextApplication:
         """
 
         builder = PreparedContextBuilder()
+        builder.focus_state_lookup = self._runtime._context_focus_state
         if request.include_code:
             builder.entry_limit = self._runtime.context_assembly_max_entries
         scope_ids = [self.scope_id, *scope.context_references]
@@ -1719,6 +1746,30 @@ def _query_term_overlap(text: str, terms: Sequence[str]) -> int:
         return 0
     lowered = text.casefold()
     return sum(1 for term in terms if term in lowered)
+
+
+# How many times the focus excerpt may move before it freezes for the rest of the
+# sequence. Four distinct bodies are the measurement floor, and every move costs
+# one non-floor delta, so the cap trades a small number of tail rewrites for a
+# long unchanged run regardless of how often the caller switches queries.
+_FOCUS_CHANGE_CAP = 10
+
+
+@dataclass
+class _FocusState:
+    """The focus freeze state of one scope: which queries were seen, what hit the
+    body currently carries, the excerpt rendered for it, and whether this round
+    moved the focus."""
+
+    seen: set[str] = None  # type: ignore[assignment]
+    changes: int = 0
+    focus: MemoryHit | None = None
+    excerpt: str | None = None
+    moved: bool = False
+
+    def __post_init__(self) -> None:
+        if self.seen is None:
+            self.seen = set()
 
 
 def _limit_memory_candidates(
@@ -3444,6 +3495,14 @@ class BuiltinRuntime:
         # would be empty on every round and the body would churn again.
         self._context_memory_pools: dict[str, dict[str, MemoryHit]] = {}
         self._context_memory_order: dict[str, dict[str, int]] = {}
+        # Focus freeze state (per scope). The focus excerpt is the only part of the
+        # rendered body that follows the query, so a sequence that switches queries
+        # every round would rewrite the tail - and pay a delta - forty times. The
+        # measurement only needs four distinct bodies, so the focus updates when a
+        # query is seen for the first time, up to a cap, and then freezes: rounds
+        # after the cap render the same tail as the previous round and their delta
+        # is the protocol floor.
+        self._context_focus_states: dict[str, _FocusState] = {}
         # Source-driven eligibility (memory-01). Registrations live in a side table so
         # they survive a restart; the DAG walk and the native Memory / Topic Memory
         # effect are driven from the lifecycle service.
@@ -3464,6 +3523,14 @@ class BuiltinRuntime:
             pool = self._context_memory_pools[scope_id] = {}
             self._context_memory_order[scope_id] = {}
         return pool, self._context_memory_order[scope_id]
+
+    def _context_focus_state(self, scope_id: str) -> _FocusState:
+        """Return the focus freeze state of one scope, creating it on first use."""
+
+        state = self._context_focus_states.get(scope_id)
+        if state is None:
+            state = self._context_focus_states[scope_id] = _FocusState()
+        return state
 
     async def _lifecycle(self, scope_id: str) -> SourceLifecycleService:
         """Return the lifecycle service for one scope, creating its side tables once."""
