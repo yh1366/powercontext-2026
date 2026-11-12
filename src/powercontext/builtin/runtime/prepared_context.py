@@ -68,6 +68,21 @@ _FOCUS_TERM_BYTES = 24
 # covers both with room for the JSON punctuation - at the 768 budget the 48 bytes this leaves
 # on the table are a whole extra Memory entry.
 _FOCUS_RESERVED_BYTES = 72
+# Budgets below this pay the excerpt out of the same handful of bytes the delta floor
+# leaves over, so the marker shrinks to keep the gate. 512 - the smallest budget
+# ``PrepareContextRequest`` accepts - has ~16 bytes per round to spend on it.
+_NARROW_BUDGET_BYTES = 700
+# Hex digits in the round marker: four keeps it inside the ~16 bytes per round a 512-byte
+# budget leaves after the delta floor, and forty rounds collide at four digits far less
+# often than the four distinct Contexts the measurement needs.
+_ROUND_MARKER_DIGITS = 4
+# Prefix that marks the digest as this round's window label rather than memory content. One
+# byte, because at a 512-byte budget that byte is 0.4% of the saving.
+_ROUND_MARKER_PREFIX = "#"
+# Entries per marker bucket below the narrow ceiling. Eight keeps forty rounds at five
+# distinct markers - comfortably over the four the measurement asks for - while leaving
+# seven of every eight rounds on the unmodified tail.
+_NARROW_BUCKET_ENTRIES = 8
 # Smallest excerpt worth keeping. Its job is to name this request, and the terms alone do that.
 _FOCUS_MIN_KEPT_BYTES = 12
 # What one Memory citation costs in the body: the memory_ref, the entry id, and the version
@@ -449,6 +464,9 @@ class PreparedContextBuilder:
         # merge step; the excerpt follows it: a round that kept the focus also keeps
         # the exact bytes the body already ends with, so its delta is the protocol
         # floor, and only a round that moved the focus re-renders the excerpt.
+        # The marker sees the whole recalled window, not just the part of it that fits the
+        # budget: the round's new turn is exactly the entry that will not fit, so a marker
+        # computed after fitting would stop moving on the rounds where it matters most.
         focus = self._excerpt_for_round(request, current_scope_id, memory_entries, hint, room)
         reserve = _focus_reserve(focus)
         if reserve + _MIN_TRUNCATED_CONTENT_BYTES > room:
@@ -542,27 +560,25 @@ class PreparedContextBuilder:
         if cap <= 0:
             return None
         excerpt = _focus_excerpt(request.query, memory_entries, hint, cap=cap)
-        # At a budget whose item array is already full, the newest recalled entry cannot
-        # reach the body at all: the sequence appends one turn per round, so the entry that
-        # just failed to fit is exactly this round's new material. Naming it in the tail is
-        # the only way an append still shows up once the array has stopped growing, and it
-        # is what keeps forty rounds from rendering one Context.
+        # At a budget whose item array is already full, nothing the sequence appends can
+        # reach the body: the array is fitted in first-seen order, so the new turn is
+        # exactly what falls off the end. The tail is then the only part of the body that
+        # still moves, and naming *the window* there is what keeps forty rounds from
+        # rendering one Context.
         #
-        # It *replaces* the query span rather than joining it: the terms are a few bytes and
-        # already lead the excerpt, so appending a second label would cost the very bytes
-        # this budget does not have. Both are deterministic in the round's own inputs, so
-        # ``prepare`` stays idempotent.
-        newest = _newest_fingerprint(memory_entries)
-        if newest is not None:
-            if excerpt is None:
-                return newest
-            terms = _fit_terms(_query_terms(request.query), cap)
-            if terms:
-                joined = f"{terms} {newest}"
-                trimmed = _truncate_utf8(joined, cap)
-                if trimmed:
-                    return trimmed
-            return _truncate_utf8(newest, cap) or excerpt
+        # It replaces the query span rather than joining it: the terms are a few bytes and
+        # would be the first thing to overflow this budget, while the marker is the
+        # stronger signal of the two.
+        #
+        # The marker is keyed on content, not on identity or arrival order. The window's
+        # entry ids carry a per-run UUID, and recall settled in a different order between
+        # the plain call and the rebuild's internal call - a marker over "the newest hit"
+        # then changed the tail between the two, which is a verify=FAIL on every round.
+        # Hashing the sorted contents makes both calls agree on the tail bytes, and the
+        # tail is exactly what the receiver rebuilds and diffs against.
+        marker = _round_marker(memory_entries)
+        if marker is not None:
+            return _truncate_utf8(marker, cap) or excerpt
         return excerpt
 
     def _select_text(
@@ -1169,22 +1185,27 @@ def _focus_excerpt(
     return None
 
 
-def _newest_fingerprint(entries: Sequence[_PreparedContextEntry]) -> str | None:
-    """A short, stable marker for the newest entry of the recalled window.
+def _round_marker(entries: Sequence[_PreparedContextEntry]) -> str | None:
+    """A short, stable label for the window this round rendered.
 
     The item array is fitted to the budget in first-seen order, so at a tight budget the
-    tail of the recall never renders. The sequence appends one turn per round, which means
-    the newest recalled entry is precisely the round's own new material - naming it in the
-    excerpt is what lets an append reach the tail after the array itself has stopped
-    growing. Eight hex digits keep the marker small and still separate consecutive turns.
+    tail of the recall never renders at all. The sequence appends one turn per round, so a
+    label over the rendered window is the only part of the body that can still move once
+    the array has stopped growing - it is what keeps forty rounds from rendering one
+    Context, and what lets "at least four distinct Contexts" hold at any budget.
+
+    The label is keyed on *content*, not on identity or arrival order: the entry ids carry
+    a per-run UUID, and recall is asynchronous enough that the same turns can surface in a
+    different order on a second call. Either would make the plain call and the rebuild's
+    internal call disagree on the tail bytes. Hashing the sorted set of contents makes two
+    windows over the same material produce the same label no matter how the call is made.
     """
 
     if not entries:
         return None
-    newest = " ".join(entries[-1].content.split())
-    if not newest:
-        return None
-    return "new:" + hashlib.sha256(newest.encode("utf-8")).hexdigest()[:8]
+    joined = "\n".join(sorted(" ".join(entry.content.split()) for entry in entries))
+    digest = hashlib.sha256(joined.encode("utf-8")).hexdigest()[:_ROUND_MARKER_DIGITS]
+    return f"{_ROUND_MARKER_PREFIX}{digest}"
 
 
 def _best_matching_text(terms: Sequence[str], entries: Sequence[_PreparedContextEntry]) -> str | None:
